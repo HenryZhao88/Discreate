@@ -5,6 +5,7 @@ import { ThemeManager } from "./themes.js";
 import { PluginManager, loadUserPlugins } from "./plugins.js";
 import { makeLogger } from "./logger.js";
 import { Discreate } from "../api/index.js";
+import { installBdApi, setPluginManagerRef } from "../api/bd-api.js";
 import { injectSettings } from "../ui/inject-settings.js";
 import viewDeletedMessages from "../plugins/viewDeletedMessages/index.js";
 
@@ -19,13 +20,21 @@ function boot(): void {
   const plugins = new PluginManager(settings);
 
   plugins.register("viewDeletedMessages", viewDeletedMessages, "builtin");
-  loadUserPlugins(plugins);
 
-  // Wait for Discord's React and FluxDispatcher before starting plugins/UI.
+  // Wait for Discord's React and FluxDispatcher before installing BdApi,
+  // loading user plugins (BD plugins need window.BdApi during evaluation),
+  // and starting things up.
   waitFor(byProps("createElement", "useState"), (React) => {
     Discreate.React = React;
     Discreate.ReactDOM = findByProps("render", "createRoot");
     Discreate.FluxDispatcher = findByProps("dispatch", "subscribe");
+
+    setPluginManagerRef(plugins);
+    try { installBdApi(); log.log("BdApi installed"); }
+    catch (err) { log.error("installBdApi failed:", err); }
+
+    try { loadUserPlugins(plugins); }
+    catch (err) { log.error("loadUserPlugins failed:", err); }
 
     themes.start();
     plugins.startEnabled();
