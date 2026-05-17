@@ -1,13 +1,14 @@
-// src/injector/cli.ts
 import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import { findDiscordInstalls } from "./discord-paths.js";
-import { injectFolder, removeFolder, isInjected } from "./app-folder.js";
+import { patchCore, unpatchCore, isCorePatched, installRuntime } from "./core-patch.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-// dist/injector/cli.js -> build output dir is dist/build
+// dist/injector/cli.js -> bundles are in dist/build
 const BUILD_DIR = join(here, "..", "build");
+const RUNTIME_DIR = join(homedir(), ".discreate", "runtime");
 
 function discordRunning(): boolean {
   try {
@@ -28,21 +29,25 @@ function requireDiscordQuit(): void {
 function cmdStatus(): void {
   const installs = findDiscordInstalls();
   if (installs.length === 0) {
-    console.log("No Discord installs found.");
+    console.log("No Discord installs found. Launch Discord once so it downloads its modules.");
     return;
   }
   for (const i of installs) {
-    console.log(`${i.branch.padEnd(7)} ${isInjected(i.resources) ? "injected" : "vanilla"}  ${i.appPath}`);
+    console.log(`${i.branch.padEnd(7)} ${isCorePatched(i.coreDir) ? "injected" : "vanilla"}  ${i.coreDir}`);
   }
 }
 
 function cmdInject(): void {
   requireDiscordQuit();
   const installs = findDiscordInstalls();
-  if (installs.length === 0) return console.error("No Discord installs found.");
+  if (installs.length === 0) {
+    console.error("No Discord installs found. Launch Discord once so it downloads its modules.");
+    process.exit(1);
+  }
+  installRuntime(BUILD_DIR, RUNTIME_DIR);
   for (const i of installs) {
-    injectFolder(i.resources, BUILD_DIR);
-    console.log(`Injected Discreate into ${i.branch} (${i.appPath})`);
+    patchCore(i.coreDir, RUNTIME_DIR);
+    console.log(`Injected Discreate into ${i.branch} (${i.coreDir})`);
   }
   console.log("Done. Launch Discord.");
 }
@@ -50,7 +55,7 @@ function cmdInject(): void {
 function cmdUninject(): void {
   requireDiscordQuit();
   for (const i of findDiscordInstalls()) {
-    removeFolder(i.resources);
+    unpatchCore(i.coreDir);
     console.log(`Removed Discreate from ${i.branch}`);
   }
 }

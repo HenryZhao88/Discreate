@@ -7,11 +7,11 @@ mkdirSync("dist/injector", { recursive: true });
 
 const shared = { bundle: true, platform: "node", target: "node20", logLevel: "info" };
 
-// Main-process loader -> dist/build/index.js
+// Main-process loader -> dist/build/loader.js
 await build({
   ...shared,
   entryPoints: ["src/loader/index.ts"],
-  outfile: "dist/build/index.js",
+  outfile: "dist/build/loader.js",
   format: "cjs",
   external: ["electron"],
 });
