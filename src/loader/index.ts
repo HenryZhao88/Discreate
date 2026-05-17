@@ -7,11 +7,20 @@ const PRELOAD = join(__dirname, "preload.js");
 class PatchedBrowserWindow extends electron.BrowserWindow {
   constructor(options: Electron.BrowserWindowConstructorOptions) {
     const wp = options.webPreferences ?? {};
-    // Remember Discord's own preload so the bridge can chain to it.
-    process.env.DISCREATE_ORIGINAL_PRELOAD = wp.preload ?? "";
+    // Pass Discord's own preload to this window's preload process via argv,
+    // so multiple windows don't clobber a shared value.
+    const original = wp.preload ?? "";
     super({
       ...options,
-      webPreferences: { ...wp, preload: PRELOAD, sandbox: false },
+      webPreferences: {
+        ...wp,
+        preload: PRELOAD,
+        sandbox: false,
+        additionalArguments: [
+          ...(wp.additionalArguments ?? []),
+          `--discreate-original-preload=${original}`,
+        ],
+      },
     });
   }
 }

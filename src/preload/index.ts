@@ -11,7 +11,8 @@ const rendererSrc = readFileSync(join(__dirname, "renderer.js"), "utf8");
 webFrame.executeJavaScript(rendererSrc);
 
 // Chain Discord's original preload so the client still works.
-const original = process.env.DISCREATE_ORIGINAL_PRELOAD;
+const arg = process.argv.find((a) => a.startsWith("--discreate-original-preload="));
+const original = arg ? arg.slice("--discreate-original-preload=".length) : "";
 if (original) {
   try {
     require(original);
