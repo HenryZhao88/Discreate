@@ -169,8 +169,7 @@ export function SettingsPanel({ plugins, themes, settings }: Props) {
 
   return React.createElement(
     "div", { style: { padding: 16, color: "#fff" } },
-    React.createElement("h2", { style: { color: "#fff" } }, "Discreate"),
-    React.createElement("div", { style: { margin: "12px 0" } },
+    React.createElement("div", { style: { marginBottom: 12 } },
       tabBtn("plugins", "Plugins"), tabBtn("themes", "Themes"), tabBtn("about", "About")),
     React.createElement("div", null, body),
   );
