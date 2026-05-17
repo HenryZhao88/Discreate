@@ -2,7 +2,7 @@
 import { initWebpack, findByProps, waitFor, byProps } from "./webpack.js";
 import { SettingsStore, nativeBackend } from "./settings.js";
 import { ThemeManager } from "./themes.js";
-import { PluginManager } from "./plugins.js";
+import { PluginManager, loadUserPlugins } from "./plugins.js";
 import { makeLogger } from "./logger.js";
 import { Discreate } from "../api/index.js";
 import { injectSettings } from "../ui/inject-settings.js";
@@ -18,7 +18,8 @@ function boot(): void {
   const themes = new ThemeManager(settings);
   const plugins = new PluginManager(settings);
 
-  plugins.register("viewDeletedMessages", viewDeletedMessages);
+  plugins.register("viewDeletedMessages", viewDeletedMessages, "builtin");
+  loadUserPlugins(plugins);
 
   // Wait for Discord's React and FluxDispatcher before starting plugins/UI.
   waitFor(byProps("createElement", "useState"), (React) => {
