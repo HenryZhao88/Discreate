@@ -2,8 +2,30 @@ import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
+import { writeFileSync, chmodSync, mkdirSync } from "node:fs";
 import { findDiscordInstalls } from "./discord-paths.js";
 import { patchCore, unpatchCore, isCorePatched, installRuntime } from "./core-patch.js";
+
+/** Write a double-clickable launcher to ~/.discreate/Discreate.command. */
+export function installLauncher(cliPath: string): string {
+  const launcherDir = join(homedir(), ".discreate");
+  mkdirSync(launcherDir, { recursive: true });
+  const launcherPath = join(launcherDir, "Discreate.command");
+  const nodeBin = process.argv[0] || "node";
+  const content =
+    `#!/bin/bash\n` +
+    `# Discreate launcher — double-click to re-inject and launch Discord.\n` +
+    `cd "$(dirname "$0")"\n` +
+    `echo "Reinjecting Discreate…"\n` +
+    `${JSON.stringify(nodeBin)} ${JSON.stringify(cliPath)} inject\n` +
+    `echo "Launching Discord…"\n` +
+    `open -a /Applications/Discord.app\n` +
+    `echo "Done."\n` +
+    `sleep 1\n`;
+  writeFileSync(launcherPath, content);
+  chmodSync(launcherPath, 0o755);
+  return launcherPath;
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 // dist/injector/cli.js -> bundles are in dist/build
@@ -49,6 +71,9 @@ function cmdInject(): void {
     patchCore(i.coreDir, RUNTIME_DIR);
     console.log(`Injected Discreate into ${i.branch} (${i.coreDir})`);
   }
+  const cliPath = fileURLToPath(import.meta.url);
+  const launcher = installLauncher(cliPath);
+  console.log(`Launcher created at ${launcher} — double-click to relaunch Discord with Discreate.`);
   console.log("Done. Launch Discord.");
 }
 
