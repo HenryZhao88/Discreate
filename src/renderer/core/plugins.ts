@@ -51,9 +51,20 @@ export class PluginManager {
       entry.plugin.start(this.context(entry.id));
       this.running.add(entry.id);
       log.log(`started ${entry.id}`);
-    } catch (err) {
+      this.writePluginLog(`started ${entry.id}`);
+    } catch (err: any) {
       log.error(`failed to start ${entry.id}:`, err);
+      this.writePluginLog(`FAILED start ${entry.id}: ${err?.stack ?? err}`);
     }
+  }
+
+  private writePluginLog(line: string): void {
+    try {
+      const n = native();
+      const path = `${n.root}/plugin-runtime.log`;
+      const existing = n.readText(path) ?? "";
+      n.writeText(path, existing + new Date().toISOString() + " " + line + "\n");
+    } catch { /* ignore */ }
   }
 
   private stopOne(entry: Registered): void {

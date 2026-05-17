@@ -16,6 +16,7 @@ export interface Native {
   deleteFile(p: string): void;
   openFolder(p: string): void;
   downloadToFolder(url: string, folder: string, filename?: string): Promise<string>;
+  fetchText(url: string): Promise<string>;
 }
 
 export function native(): Native {
