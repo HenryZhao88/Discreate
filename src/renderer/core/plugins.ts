@@ -21,12 +21,10 @@ export class PluginManager {
 
   constructor(private settings: SettingsStore) {}
 
-  /** Register a built-in or user plugin under a stable id. */
   register(id: string, plugin: DiscreatePlugin, source: "builtin" | "user" = "builtin", path?: string): void {
     this.registered.push({ id, plugin, source, path });
   }
 
-  /** Remove a plugin from the manager. If running, it's stopped first. */
   unregister(id: string): void {
     const idx = this.registered.findIndex((r) => r.id === id);
     if (idx === -1) return;
@@ -35,13 +33,9 @@ export class PluginManager {
     this.registered.splice(idx, 1);
   }
 
-  all(): Registered[] {
-    return [...this.registered];
-  }
+  all(): Registered[] { return [...this.registered]; }
 
-  isEnabled(id: string): boolean {
-    return this.settings.isPluginEnabled(id);
-  }
+  isEnabled(id: string): boolean { return this.settings.isPluginEnabled(id); }
 
   private context(id: string): PluginContext {
     return {
@@ -81,7 +75,6 @@ export class PluginManager {
     enabled ? this.startOne(entry) : this.stopOne(entry);
   }
 
-  /** Start every plugin marked enabled in settings. */
   startEnabled(): void {
     for (const entry of this.registered) {
       if (this.settings.isPluginEnabled(entry.id)) this.startOne(entry);
@@ -89,13 +82,70 @@ export class PluginManager {
   }
 }
 
+// ---------------------------------------------------------------------------
+// BD plugin meta parser
+// ---------------------------------------------------------------------------
+
+export interface BdMeta {
+  name: string;
+  version: string;
+  description: string;
+  author: string;
+}
+
+export function parseBdMeta(source: string): BdMeta | null {
+  // Look at the first JSDoc-style block at the top of the file.
+  const head = source.slice(0, 1500);
+  const blockMatch = head.match(/\/\*\*([\s\S]*?)\*\//);
+  if (!blockMatch) return null;
+  const block = blockMatch[1];
+  function field(name: string): string {
+    const re = new RegExp(`@${name}\\s+(.+)`);
+    const m = block.match(re);
+    return m ? m[1].trim() : "";
+  }
+  const name = field("name");
+  if (!name) return null;
+  return {
+    name,
+    version: field("version"),
+    description: field("description"),
+    author: field("author") || field("authorName"),
+  };
+}
+
+/** Strip the JScript `/*@cc_on ... @*\/` IIFE used by BD plugins. */
+export function stripCcOn(source: string): string {
+  return source.replace(/\/\*@cc_on[\s\S]*?@\*\//g, "");
+}
+
+function appendBdLog(line: string): void {
+  try {
+    const path = `${native().root}/bd-load.log`;
+    const prev = native().readText(path) ?? "";
+    native().writeText(path, prev + line + "\n");
+  } catch { /* ignore */ }
+}
+
 /**
- * Load every `*.plugin.js` (and `*.js`) file in ~/.discreate/plugins and
- * register it as a user plugin. Each file is evaluated as a CommonJS module:
- * `module.exports = { name, description, start, stop }` or
- * `export default { ... }` (after a typical bundle).
- * One bad plugin doesn't break the others.
+ * Wrap a BD plugin instance into a Discreate plugin.
  */
+function wrapBdInstance(instance: any, meta: BdMeta): DiscreatePlugin {
+  return {
+    name: meta.name,
+    description: meta.description,
+    authors: meta.author ? [meta.author] : [],
+    start() {
+      try { instance.load?.(); } catch (e) { log.warn(`${meta.name}.load() threw:`, e); }
+      try { instance.start?.(); } catch (e) { log.error(`${meta.name}.start() threw:`, e); }
+    },
+    stop() {
+      try { instance.stop?.(); } catch (e) { log.error(`${meta.name}.stop() threw:`, e); }
+      try { instance.unload?.(); } catch (e) { log.warn(`${meta.name}.unload() threw:`, e); }
+    },
+  };
+}
+
 export function loadUserPlugins(manager: PluginManager): void {
   const n = native();
   const dir = n.pluginsDir;
@@ -105,6 +155,55 @@ export function loadUserPlugins(manager: PluginManager): void {
     try {
       const code = n.readText(path);
       if (code == null) continue;
+
+      const meta = parseBdMeta(code);
+      const looksLikeBd = !!meta && (code.includes("BdApi") || /module\.exports\s*=\s*class/.test(code));
+
+      if (looksLikeBd && meta) {
+        const cleaned = stripCcOn(code);
+        const module: { exports: any } = { exports: {} };
+        const fn = new Function(
+          "module", "exports", "global", "window", "BdApi", "require",
+          cleaned,
+        );
+        try {
+          fn(
+            module,
+            module.exports,
+            window,
+            window,
+            (window as any).BdApi,
+            (_id: string) => {
+              throw new Error(`require('${_id}') not supported in Discreate BD shim`);
+            },
+          );
+        } catch (err) {
+          log.error(`BD plugin ${file} failed to evaluate:`, err);
+          appendBdLog(`failed-eval ${meta.name}: ${(err as any)?.message ?? err}`);
+          continue;
+        }
+        const Exported = module.exports?.default ?? module.exports;
+        if (!Exported) {
+          log.warn(`BD plugin ${file} did not export anything`);
+          appendBdLog(`failed-noexport ${meta.name}`);
+          continue;
+        }
+        let instance: any;
+        try {
+          instance = typeof Exported === "function" ? new Exported() : Exported;
+        } catch (err) {
+          log.error(`BD plugin ${file} constructor threw:`, err);
+          appendBdLog(`failed-ctor ${meta.name}: ${(err as any)?.message ?? err}`);
+          continue;
+        }
+        const id = file.replace(/\.plugin\.js$/i, "").replace(/\.js$/i, "");
+        manager.register(id, wrapBdInstance(instance, meta), "user", path);
+        log.log(`loaded BD plugin ${meta.name} (${id})`);
+        appendBdLog(`loaded ${meta.name}`);
+        continue;
+      }
+
+      // Discreate-native plugin
       const module: { exports: any } = { exports: {} };
       const fn = new Function("module", "exports", code);
       fn(module, module.exports);
@@ -118,6 +217,7 @@ export function loadUserPlugins(manager: PluginManager): void {
       log.log(`loaded user plugin ${id} from ${file}`);
     } catch (err) {
       log.error(`failed to load plugin ${file}:`, err);
+      appendBdLog(`failed ${file}: ${(err as any)?.message ?? err}`);
     }
   }
 }
