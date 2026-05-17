@@ -12,6 +12,10 @@ export interface Native {
   readDeletedLog(): string | null;
   writeDeletedLog(data: string): void;
   watchDir(p: string, cb: () => void): void;
+  reinject(): Promise<{ patched: string[] }>;
+  deleteFile(p: string): void;
+  openFolder(p: string): void;
+  downloadToFolder(url: string, folder: string, filename?: string): Promise<string>;
 }
 
 export function native(): Native {
