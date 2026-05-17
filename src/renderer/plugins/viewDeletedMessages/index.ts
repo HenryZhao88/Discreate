@@ -2,7 +2,7 @@
 import { Discreate } from "../../api/index.js";
 import type { DiscreatePlugin, PluginContext } from "../../api/index.js";
 import { findByProps } from "../../core/webpack.js";
-import { before, after, instead } from "../../core/patcher.js";
+import { after, instead } from "../../core/patcher.js";
 import { makeLogger } from "../../core/logger.js";
 import { native } from "../../core/paths.js";
 
@@ -19,7 +19,12 @@ interface DeletedRecord {
 
 function loadLog(): DeletedRecord[] {
   const raw = native().readDeletedLog();
-  return raw ? (JSON.parse(raw) as DeletedRecord[]) : [];
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw) as DeletedRecord[];
+  } catch {
+    return [];
+  }
 }
 
 function appendLog(record: DeletedRecord, cap: number): void {
@@ -47,7 +52,7 @@ const plugin: DiscreatePlugin = {
     // 1. Intercept delete actions: mark + keep instead of removing.
     instead(OWNER, Dispatcher, "dispatch", (args, originalDispatch) => {
       const action = args[0];
-      if (action?.type === "MESSAGE_DELETE") {
+      if (action?.type === "MESSAGE_DELETE" && !action.__discreateLocal) {
         const msg = MessageStore?.getMessage(action.channelId, action.id);
         if (msg) {
           msg.deleted = true;
@@ -83,7 +88,7 @@ const plugin: DiscreatePlugin = {
 
     // 2. Red-highlight deleted messages in the rendered row.
     if (redHighlight) {
-      const MessageRow = findByProps("MessageListItem") ?? findByProps("default");
+      const MessageRow = findByProps("MessageListItem");
       if (MessageRow) {
         after(OWNER, MessageRow, "default", (rowArgs, rowResult) => {
           const msg = rowArgs[0]?.message;
@@ -106,11 +111,6 @@ const plugin: DiscreatePlugin = {
     (window as any).DiscreateLocalDelete = (channelId: string, messageId: string) => {
       Dispatcher.dispatch({ type: "MESSAGE_DELETE", channelId, id: messageId, __discreateLocal: true });
     };
-
-    // Let a locally-initiated delete pass through untouched.
-    before(OWNER, Dispatcher, "dispatch", (dispatchArgs) => {
-      if (dispatchArgs[0]?.__discreateLocal) dispatchArgs[0].type = "DISCREATE_LOCAL_DELETE_PASS";
-    });
 
     log.log("started");
   },
