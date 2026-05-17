@@ -30,6 +30,7 @@ export function patchCore(coreDir: string, runtimeDir: string): void {
   const content =
     `// ${MARKER}\n` +
     `require(${JSON.stringify(loaderPath)});\n` +
+    `if (global.__discreateSelfHeal) global.__discreateSelfHeal(__dirname);\n` +
     `module.exports = require('./core.asar');\n`;
   writeFileSync(idx, content);
 }
