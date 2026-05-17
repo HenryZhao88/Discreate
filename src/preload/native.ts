@@ -10,12 +10,19 @@ import * as https from "node:https";
 import * as http from "node:http";
 
 const ROOT = join(homedir(), ".discreate");
-const dirs = { themes: join(ROOT, "themes"), plugins: join(ROOT, "plugins") };
+const dirs = { themes: join(ROOT, "themes"), plugins: join(ROOT, "plugins"), bdData: join(ROOT, "bd-data") };
 
 function ensureLayout(): void {
-  for (const d of [ROOT, dirs.themes, dirs.plugins]) {
+  for (const d of [ROOT, dirs.themes, dirs.plugins, dirs.bdData]) {
     if (!existsSync(d)) mkdirSync(d, { recursive: true });
   }
+}
+
+function ensureParent(p: string): void {
+  try {
+    const parent = p.substring(0, p.lastIndexOf("/"));
+    if (parent && !existsSync(parent)) mkdirSync(parent, { recursive: true });
+  } catch { /* ignore */ }
 }
 
 /** True if `p` resolves to a path inside `parent`. */
@@ -67,7 +74,7 @@ export function exposeNative(): void {
   contextBridge.exposeInMainWorld("DiscreateNative", {
     root: ROOT,
     readText: (p: string) => (existsSync(p) ? readFileSync(p, "utf8") : null),
-    writeText: (p: string, data: string) => writeFileSync(p, data),
+    writeText: (p: string, data: string) => { ensureParent(p); writeFileSync(p, data); },
     listDir: (p: string) => (existsSync(p) ? readdirSync(p) : []),
     readSettings: () => {
       const f = join(ROOT, "settings.json");
