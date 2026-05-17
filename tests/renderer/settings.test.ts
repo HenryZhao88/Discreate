@@ -38,4 +38,10 @@ describe("SettingsStore", () => {
     store.setPluginOptions("viewDeletedMessages", { redHighlight: false });
     expect(store.getPluginOptions("viewDeletedMessages")).toEqual({ redHighlight: false });
   });
+
+  it("falls back to defaults when storage holds corrupt JSON", () => {
+    const store = new SettingsStore({ read: () => "{not json", write: () => {} });
+    expect(store.getEnabledThemes()).toEqual([]);
+    expect(store.isPluginEnabled("x")).toBe(false);
+  });
 });

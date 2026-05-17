@@ -19,7 +19,12 @@ export class SettingsStore {
 
   constructor(private backend: SettingsBackend) {
     const raw = backend.read();
-    this.data = raw ? { ...DEFAULTS, ...JSON.parse(raw) } : { ...DEFAULTS };
+    let parsed: Partial<SettingsData> = {};
+    if (raw) {
+      try { parsed = JSON.parse(raw); }
+      catch { parsed = {}; }
+    }
+    this.data = { ...DEFAULTS, ...parsed };
   }
 
   private persist(): void {

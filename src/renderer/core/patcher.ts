@@ -51,6 +51,7 @@ export function instead(
 }
 
 export function unpatchAll(owner: string): void {
-  for (const unpatch of registry.get(owner) ?? []) unpatch();
+  const list = registry.get(owner) ?? [];
+  for (let i = list.length - 1; i >= 0; i--) list[i]();
   registry.delete(owner);
 }

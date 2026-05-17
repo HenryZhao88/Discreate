@@ -29,4 +29,13 @@ describe("patcher", () => {
     unpatchAll("t");
     expect(obj.val()).toBe(5);
   });
+
+  it("unpatchAll restores correctly when multiple patches stack on one key", () => {
+    const obj = { val: () => 1 };
+    before("t", obj, "val", () => {});
+    after("t", obj, "val", (_args, ret) => ret + 100);
+    instead("t", obj, "val", (_args, orig) => orig() * 2);
+    unpatchAll("t");
+    expect(obj.val()).toBe(1);
+  });
 });
