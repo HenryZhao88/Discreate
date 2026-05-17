@@ -113,13 +113,7 @@ export function injectSettings(deps: Deps): void {
   root.id = ROOT_ID;
   document.body.appendChild(root);
 
-  // ---------- pill button ----------
-  const pill = document.createElement("button");
-  pill.id = PILL_ID;
-  pill.title = "Open Discreate settings (Cmd/Ctrl+Shift+D)";
-  pill.textContent = "🛠 Discreate";
-  pill.addEventListener("click", () => openModal());
-  root.appendChild(pill);
+  // No visible pill — the panel opens via Cmd/Ctrl+Shift+D only.
 
   // ---------- modal overlay ----------
   const overlay = document.createElement("div");
@@ -378,12 +372,16 @@ export function injectSettings(deps: Deps): void {
   // Initialize active tab styling.
   setTab(currentTab);
 
-  // Global shortcut.
+  // Global shortcut. `isTrusted` filters out synthetic events — Discord (or one
+  // of its modules) synthetically dispatches a stream of Cmd+Shift+D events at
+  // startup, and without this check our toggle fires for each of them, leaving
+  // the modal in a random state by the time the user presses the real key.
   window.addEventListener(
     "keydown",
     (e) => {
+      if (!e.isTrusted) return;
       const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.shiftKey && (e.key === "d" || e.key === "D")) {
+      if (mod && e.shiftKey && (e.key === "d" || e.key === "D" || e.code === "KeyD")) {
         e.preventDefault();
         e.stopPropagation();
         toggleModal();
