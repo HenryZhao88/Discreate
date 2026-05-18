@@ -130,6 +130,103 @@ export function stripCcOn(source: string): string {
   return source.replace(/\/\*@cc_on[\s\S]*?@\*\//g, "");
 }
 
+/**
+ * BetterDiscord plugins are written against Electron renderers with full Node
+ * integration and expect `require('electron' | 'fs' | 'path' | …)` to work.
+ * Discord proper sandboxes the renderer, so we hand back lightweight stubs:
+ *
+ * - `fs` / `path` get the renderer-safe subset routed through our preload bridge
+ *   (read/write/list inside `~/.discreate`; everything else is a logging no-op).
+ * - `electron` returns a minimal object exposing `shell.openExternal` (via
+ *   `window.open`) and nothing else; methods plugins never call return a
+ *   not-implemented proxy.
+ *
+ * Plugins that depend on heavyweight Node features still won't fully work, but
+ * they reach their patching stage and provide most of their visible behaviour.
+ */
+function makeRequireShim(): (id: string) => any {
+  function notImpl(path: string): any {
+    return new Proxy(function () {}, {
+      get: (_t, k) => typeof k === "string" ? notImpl(`${path}.${k}`) : undefined,
+      apply: () => undefined, // swallow calls; plugin code keeps going
+    });
+  }
+  const cache = new Map<string, any>();
+  return (id: string): any => {
+    if (cache.has(id)) return cache.get(id);
+    let mod: any;
+    if (id === "electron") {
+      mod = {
+        shell: { openExternal: (url: string) => window.open(url, "_blank") },
+        ipcRenderer: notImpl("electron.ipcRenderer"),
+        clipboard: { writeText: (t: string) => navigator.clipboard?.writeText(t) },
+        remote: notImpl("electron.remote"),
+      };
+    } else if (id === "fs") {
+      // No real filesystem in the renderer; back what we can with the native bridge.
+      const n = native();
+      const noopSync = (..._a: any[]) => undefined;
+      mod = {
+        readFileSync: (p: string, _enc?: any) => n.readText(p) ?? "",
+        writeFileSync: (p: string, data: string) => n.writeText(p, String(data)),
+        existsSync: (_p: string) => false,
+        statSync: () => ({ size: 0, isDirectory: () => false, isFile: () => true }),
+        readdirSync: (p: string) => n.listDir(p),
+        mkdirSync: noopSync,
+        unlinkSync: noopSync,
+        createWriteStream: () => notImpl("fs.createWriteStream"),
+        createReadStream: () => notImpl("fs.createReadStream"),
+        promises: notImpl("fs.promises"),
+      };
+    } else if (id === "path") {
+      mod = {
+        join: (...parts: string[]) => parts.filter(Boolean).join("/").replace(/\/+/g, "/"),
+        resolve: (...parts: string[]) => parts.filter(Boolean).join("/").replace(/\/+/g, "/"),
+        dirname: (p: string) => p.substring(0, Math.max(0, p.lastIndexOf("/"))),
+        basename: (p: string, ext?: string) => {
+          const b = p.substring(p.lastIndexOf("/") + 1);
+          return ext && b.endsWith(ext) ? b.slice(0, -ext.length) : b;
+        },
+        extname: (p: string) => { const i = p.lastIndexOf("."); return i < 0 ? "" : p.slice(i); },
+        sep: "/",
+      };
+    } else if (id === "request") {
+      // No-op shim; plugin code that depends on it logs and moves on.
+      mod = notImpl("require('request')");
+    } else if (id === "events") {
+      const { EventEmitter } = require_events_polyfill();
+      mod = { EventEmitter };
+    } else {
+      mod = notImpl(`require('${id}')`);
+    }
+    cache.set(id, mod);
+    return mod;
+  };
+}
+
+function require_events_polyfill(): { EventEmitter: any } {
+  class EE {
+    private _h: Record<string, ((...a: any[]) => void)[]> = {};
+    on(ev: string, fn: (...a: any[]) => void): this { (this._h[ev] ??= []).push(fn); return this; }
+    off(ev: string, fn: (...a: any[]) => void): this {
+      this._h[ev] = (this._h[ev] ?? []).filter(f => f !== fn); return this;
+    }
+    emit(ev: string, ...args: any[]): boolean {
+      const list = this._h[ev]; if (!list?.length) return false;
+      for (const f of list.slice()) { try { f(...args); } catch { /* ignore */ } }
+      return true;
+    }
+    removeAllListeners(ev?: string): this {
+      if (ev) delete this._h[ev]; else this._h = {}; return this;
+    }
+    once(ev: string, fn: (...a: any[]) => void): this {
+      const wrap = (...a: any[]) => { this.off(ev, wrap); fn(...a); };
+      return this.on(ev, wrap);
+    }
+  }
+  return { EventEmitter: EE };
+}
+
 function appendBdLog(line: string): void {
   try {
     const path = `${native().root}/bd-load.log`;
@@ -184,9 +281,7 @@ export function loadUserPlugins(manager: PluginManager): void {
             window,
             window,
             (window as any).BdApi,
-            (_id: string) => {
-              throw new Error(`require('${_id}') not supported in Discreate BD shim`);
-            },
+            makeRequireShim(),
           );
         } catch (err) {
           log.error(`BD plugin ${file} failed to evaluate:`, err);

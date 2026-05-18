@@ -7,7 +7,7 @@
 // rather than throwing, so partial BdApi gaps degrade gracefully.
 
 import { Discreate } from "./index.js";
-import { find, findByProps, findByCode, byProps, byCode } from "../core/webpack.js";
+import { find, findByProps, findByPropsLazy, findByCode, findByFactorySource, findByFactorySourceExport, byProps, byCode } from "../core/webpack.js";
 import { before, after, instead, unpatchAll } from "../core/patcher.js";
 import { native } from "../core/paths.js";
 import { makeLogger } from "../core/logger.js";
@@ -91,7 +91,29 @@ function semverCompare(a: string, b: string): number {
   return 0;
 }
 
-export const BdUtils = { findInTree, getNestedValue, semverCompare };
+/**
+ * Standard `classnames`-style joiner — BD plugins import this as
+ * `BdApi.Utils.className`. Concatenates string args, falsy-skips, supports
+ * `{ class: bool }` objects and nested arrays.
+ */
+function className(...args: any[]): string {
+  const out: string[] = [];
+  for (const a of args) {
+    if (a == null || a === false) continue;
+    if (typeof a === "string" || typeof a === "number") {
+      const s = String(a).trim();
+      if (s) out.push(s);
+    } else if (Array.isArray(a)) {
+      const inner = className(...a);
+      if (inner) out.push(inner);
+    } else if (typeof a === "object") {
+      for (const k of Object.keys(a)) if (a[k]) out.push(k);
+    }
+  }
+  return out.join(" ");
+}
+
+export const BdUtils = { findInTree, getNestedValue, semverCompare, className };
 
 // ---------------------------------------------------------------------------
 // Webpack
@@ -157,11 +179,73 @@ function buildWebpack(): any {
     return undefined;
   }
 
-  function getByKeys(...keys: string[]): any { return findByProps(...keys); }
-  function getBySource(...frags: any[]): any {
-    return findByCode(...frags.map((f) => (typeof f === "function" ? f.toString() : String(f))));
+  function getByKeys(...keys: string[]): any { return findByPropsLazy(...keys); }
+
+  /**
+   * Coerce BD-style varargs into (fragments, opts). The last arg can be a
+   * plain options object (`{searchExports, defaultExport, ...}`); everything
+   * else is a search fragment.
+   */
+  function coerceFragsOpts(args: any[]): { frags: string[]; opts: any } {
+    let opts: any = {};
+    const items = [...args];
+    const last = items[items.length - 1];
+    if (last && typeof last === "object" && !Array.isArray(last) && !(last instanceof Function)) {
+      opts = items.pop();
+    }
+    const frags: string[] = [];
+    for (const a of items) {
+      if (typeof a === "string") frags.push(a);
+      else if (Array.isArray(a)) for (const s of a) if (typeof s === "string") frags.push(s);
+      else if (typeof a === "function") frags.push(Function.prototype.toString.call(a));
+    }
+    return { frags, opts };
   }
-  function getByStrings(...strings: string[]): any { return findByCode(...strings); }
+  function getBySource(...args: any[]): any {
+    const { frags, opts } = coerceFragsOpts(args);
+    if (frags.length === 0) return undefined;
+    // BD plugins search module *factory* source (where string literals live),
+    // not export source. With `searchExports`/`declarationFilter`, BD drills
+    // into the matching module and returns the inner function — we do the
+    // same so plugins get a callable, not the wrapper object.
+    const drill = opts?.searchExports === true || opts?.declarationFilter != null || opts?.defaultExport === true;
+    const live = drill ? findByFactorySourceExport(...frags) : findByFactorySource(...frags);
+    if (live !== undefined) return live;
+    return findByCode(...frags);
+  }
+  function getByStrings(...args: any[]): any { return getBySource(...args); }
+
+  /** Find a module whose prototype has all given keys (typically a class). */
+  function getByPrototypeKeys(...args: any[]): any {
+    // Last arg may be an options object.
+    let opts: any = {};
+    const items = [...args];
+    const last = items[items.length - 1];
+    if (last && typeof last === "object" && !Array.isArray(last) && !(last instanceof Function)) {
+      opts = items.pop();
+    }
+    const keys: string[] = [];
+    for (const a of items) {
+      if (typeof a === "string") keys.push(a);
+      else if (Array.isArray(a)) for (const s of a) if (typeof s === "string") keys.push(s);
+    }
+    void opts;
+    const matches = (proto: any) => proto && keys.every((k) => proto[k] !== undefined);
+    return find((mod) => {
+      if (typeof mod === "function" && matches(mod.prototype)) return true;
+      if (mod && typeof mod === "object") {
+        for (const v of Object.values(mod)) {
+          if (typeof v === "function" && matches((v as any).prototype)) return true;
+        }
+      }
+      return false;
+    });
+  }
+
+  /** Aliases some BD plugins use. */
+  function getByDisplayName(name: string): any {
+    return find((mod) => mod && (mod.displayName === name || mod.default?.displayName === name));
+  }
 
   function getMangled(filter: any, mapping: Record<string, any>): any {
     const result: Record<string, any> = {};
@@ -199,6 +283,8 @@ function buildWebpack(): any {
     getByKeys,
     getBySource,
     getByStrings,
+    getByPrototypeKeys,
+    getByDisplayName,
     getMangled,
     // Common BD aliases
     waitForModule: (filter: any) => getModule(filter),
@@ -384,17 +470,22 @@ function buildUI(): any {
         return;
       }
     } catch (e) { log.warn("showConfirmationModal native path failed:", e); }
-    const ok = window.confirm(`${title}\n\n${typeof content === "string" ? content : ""}`);
-    if (ok) opts?.onConfirm?.(); else opts?.onCancel?.();
+    // Defer user input to a non-blocking toast + auto-confirm. window.confirm
+    // would freeze the entire renderer and is a no-go inside Discord.
+    showToast(`${title}: ${typeof content === "string" ? content : ""} (auto-confirmed)`, { type: "info" });
+    queueMicrotask(() => opts?.onConfirm?.());
   }
 
   function showChangelogModal(opts: any = {}): void {
-    const lines = (opts?.changes ?? []).map((c: any) => `- ${c.title ?? ""}`).join("\n");
-    window.alert(`${opts?.title ?? "Changelog"}\n\n${lines}`);
+    // NEVER call window.alert here — it blocks the renderer until dismissed
+    // and freezes the plugin mid-init (and Discord with it).
+    const lines = (opts?.changes ?? []).map((c: any) => `- ${c.title ?? ""}`).join(" / ");
+    log.log(`changelog: ${opts?.title ?? ""}: ${lines}`);
+    showToast(opts?.title ?? "Changelog", { type: "info" });
   }
 
   function showInviteModal(code: string): void {
-    window.alert(`Invite: discord.gg/${code}`);
+    showToast(`Invite: discord.gg/${code}`, { type: "info" });
   }
 
   function createTooltip(node: HTMLElement, content: string, _opts: any = {}): any {
@@ -631,7 +722,8 @@ export function installBdApi(): any {
       stacktrace: (msg: string, err: any) => log.error(msg, err),
     },
     alert(title: string, content: any) {
-      window.alert(`${title}\n\n${typeof content === "string" ? content : ""}`);
+      // window.alert blocks the renderer — funnel through the non-blocking toast.
+      UI.showToast(`${title}: ${typeof content === "string" ? content : ""}`, { type: "info" });
     },
     // Legacy aliases that old BD plugins use
     findModule: Webpack.getModule,

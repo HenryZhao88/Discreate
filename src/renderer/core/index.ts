@@ -1,5 +1,5 @@
 // src/renderer/core/index.ts
-import { initWebpack, findByProps, waitFor, byProps } from "./webpack.js";
+import { initWebpack, findByProps, waitFor, byProps, forceLoadAllChunks } from "./webpack.js";
 import { SettingsStore, nativeBackend } from "./settings.js";
 import { ThemeManager } from "./themes.js";
 import { PluginManager, loadUserPlugins } from "./plugins.js";
@@ -33,13 +33,18 @@ function boot(): void {
     try { installBdApi(); log.log("BdApi installed"); }
     catch (err) { log.error("installBdApi failed:", err); }
 
-    try { loadUserPlugins(plugins); }
-    catch (err) { log.error("loadUserPlugins failed:", err); }
+    // BD plugins assume every Discord module is reachable at boot. Force-load
+    // all lazy chunks so finders can see MessageStore, ChannelStore, etc.
+    // Awaited so plugins see a populated module cache.
+    forceLoadAllChunks().finally(() => {
+      try { loadUserPlugins(plugins); }
+      catch (err) { log.error("loadUserPlugins failed:", err); }
 
-    themes.start();
-    plugins.startEnabled();
-    injectSettings({ plugins, themes, settings });
-    log.log("ready");
+      themes.start();
+      plugins.startEnabled();
+      injectSettings({ plugins, themes, settings });
+      log.log("ready");
+    });
   });
 }
 
