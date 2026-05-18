@@ -64,9 +64,8 @@ let diagTimers: ReturnType<typeof setInterval>[] = [];
 let unloadHandler: (() => void) | null = null;
 
 const plugin: DiscreatePlugin = {
-  name: "View Deleted Messages",
-  description:
-    "Keeps deleted messages visible with a red highlight and logs every deletion.",
+  name: "Message Logger",
+  description: "Keeps deleted messages, logs edits with history, and adds a message log panel.",
   authors: ["Discreate"],
 
   start(ctx: PluginContext) {

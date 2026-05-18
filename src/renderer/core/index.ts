@@ -8,6 +8,7 @@ import { Discreate } from "../api/index.js";
 import { installBdApi, setPluginManagerRef } from "../api/bd-api.js";
 import { injectSettings } from "../ui/inject-settings.js";
 import viewDeletedMessages from "../plugins/viewDeletedMessages/index.js";
+import readAll from "../plugins/readAll/index.js";
 
 const log = makeLogger("core");
 
@@ -20,6 +21,7 @@ function boot(): void {
   const plugins = new PluginManager(settings);
 
   plugins.register("viewDeletedMessages", viewDeletedMessages, "builtin");
+  plugins.register("readAll", readAll, "builtin");
 
   // Wait for Discord's React and FluxDispatcher before installing BdApi,
   // loading user plugins (BD plugins need window.BdApi during evaluation),
