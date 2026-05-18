@@ -25,6 +25,27 @@ export function byProps(...props: string[]): ModuleFilter {
     props.every((p) => mod[p] !== undefined);
 }
 
+/**
+ * Match a Flux store by its registered name (`getName()`).
+ *
+ * Prop-based finders are unreliable for stores: many unrelated modules expose
+ * a `getMessage`/`getMessages` (or similar) method pair, and the first match
+ * is often a helper that holds no data. Every real Flux store reports a stable
+ * name, so matching on that picks the genuine store.
+ */
+export function byStoreName(name: string): ModuleFilter {
+  return (mod) => {
+    if (!mod || typeof mod !== "object") return false;
+    const getName = (mod as any).getName;
+    if (typeof getName !== "function") return false;
+    try {
+      return getName.call(mod) === name;
+    } catch {
+      return false;
+    }
+  };
+}
+
 export function byCode(...fragments: string[]): ModuleFilter {
   return (mod) => {
     if (typeof mod === "function") {
@@ -49,6 +70,54 @@ export function searchModules(modules: any[], filter: ModuleFilter): any {
   return undefined;
 }
 
+/**
+ * Yield a module's exports object plus each of its own object/function values.
+ *
+ * Discord's bundler mangles export names — a store the source calls
+ * `UserStore` ships as `exports.Z` (or `.ZP`, `.default`, …). A finder that
+ * only checks the exports object and `.default` misses every such module, so
+ * we surface each individual export value as a candidate too.
+ */
+export function* exportCandidates(exports: any): Generator<any> {
+  if (exports == null) return;
+  yield exports;
+  if (typeof exports !== "object" && typeof exports !== "function") return;
+  let keys: string[];
+  try {
+    keys = Object.keys(exports);
+  } catch {
+    return;
+  }
+  for (const k of keys) {
+    let v: any;
+    try {
+      v = exports[k];
+    } catch {
+      // a hostile module can expose a throwing getter; skip it
+      continue;
+    }
+    if (v != null && (typeof v === "object" || typeof v === "function")) yield v;
+  }
+}
+
+/**
+ * Search a list of module-exports objects, drilling into mangled named
+ * exports. Returns the matching candidate itself (the inner store/component),
+ * not its wrapper module.
+ */
+export function findIn(modules: any[], filter: ModuleFilter): any {
+  for (const mod of modules) {
+    for (const candidate of exportCandidates(mod)) {
+      try {
+        if (filter(candidate)) return candidate;
+      } catch {
+        // skip
+      }
+    }
+  }
+  return undefined;
+}
+
 // --- live webpack hook (exercised inside Discord, not in unit tests) ---
 
 let wpRequire: any = null;
@@ -60,11 +129,15 @@ function notifyWaiters(exports: any): void {
   for (let i = waiters.length - 1; i >= 0; i--) {
     const w = waiters[i];
     let match: any;
-    try {
-      if (w.filter(exports)) match = exports;
-      else if (exports.default && w.filter(exports.default)) match = exports.default;
-    } catch {
-      // A hostile module's filter can throw; ignore and keep scanning.
+    for (const candidate of exportCandidates(exports)) {
+      try {
+        if (w.filter(candidate)) {
+          match = candidate;
+          break;
+        }
+      } catch {
+        // A hostile module's filter can throw; ignore and keep scanning.
+      }
     }
     if (match) {
       waiters.splice(i, 1);
@@ -231,25 +304,16 @@ export function initWebpack(): void {
  * modules that loaded before initWebpack ran.
  */
 export function find(filter: ModuleFilter): any {
-  for (const mod of cache) {
-    try {
-      if (filter(mod)) return mod;
-    } catch {
-      // skip
-    }
-  }
+  const cached = findIn(cache, filter);
+  if (cached !== undefined) return cached;
   if (wpRequire?.c) {
     const c = wpRequire.c;
+    const live: any[] = [];
     for (const id of Object.keys(c)) {
       const ex = c[id]?.exports;
-      if (!ex) continue;
-      try {
-        if (filter(ex)) return ex;
-        if (ex.default && filter(ex.default)) return ex.default;
-      } catch {
-        // skip
-      }
+      if (ex) live.push(ex);
     }
+    return findIn(live, filter);
   }
   return undefined;
 }
@@ -263,6 +327,11 @@ export function findByProps(...props: string[]): any {
   );
   if (stringy !== undefined) return stringy;
   return find(byProps(...props));
+}
+
+/** Find a live Flux store instance by its registered `getName()`. */
+export function findStore(name: string): any {
+  return find(byStoreName(name));
 }
 
 /**
@@ -297,8 +366,7 @@ function findByLazyProps(props: string[]): any {
     if (!matchers.every((m) => m(src))) continue;
     let mod: any;
     try { mod = wpRequire(id); } catch { continue; }
-    const candidates = [mod, mod?.default].filter(Boolean);
-    for (const c of candidates) {
+    for (const c of exportCandidates(mod)) {
       if (!isIntlMessagesProxy(c) && props.every((p) => c[p] !== undefined)) {
         return c;
       }
