@@ -171,6 +171,10 @@ const plugin: DiscreatePlugin = {
       }
 
       if (action?.type === "MESSAGE_DELETE") {
+        if (action.discreateLocalDelete) {
+          activity(`local delete passthrough ${action.id}`);
+          return originalDispatch(action);
+        }
         activity(`MESSAGE_DELETE seen: channel=${action.channelId} id=${action.id}`);
         if (keep(action.channelId, action.id)) {
           activity("  -> kept; dispatching neutralized action");
@@ -227,6 +231,20 @@ const plugin: DiscreatePlugin = {
     });
 
     startDomLayer();
+
+    setLocalDeleteHandler((channelId, messageId) => {
+      try {
+        unmarkDeleted(channelId, messageId);
+        editHistory.delete(messageId);
+        removeDeleted(messageId);
+        // Dispatch a genuine MESSAGE_DELETE so Discord's stores drop the message.
+        // `discreateLocalDelete` lets our own interceptor recognise and pass it.
+        Dispatcher.dispatch({ type: "MESSAGE_DELETE", channelId, id: messageId, discreateLocalDelete: true });
+        activity(`local delete ${messageId}`);
+      } catch (err) {
+        log.error("local delete failed:", err);
+      }
+    });
 
     // Flush the buffered log when the renderer unloads, so a reload never
     // hides the action stream that led up to it.
