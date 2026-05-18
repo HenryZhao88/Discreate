@@ -1,6 +1,11 @@
 // src/renderer/plugins/readAll/index.ts
 // First-party "Read All" button — marks every unread server channel read.
 
+import type { DiscreatePlugin } from "../../api/index.js";
+import { Discreate } from "../../api/index.js";
+import { findStore } from "../../core/webpack.js";
+import { makeLogger } from "../../core/logger.js";
+
 export interface AckChannel {
   channelId: string;
   messageId: string;
@@ -44,11 +49,6 @@ export function collectUnreadChannels(stores: ReadAllStores): AckChannel[] {
   }
   return out;
 }
-
-import type { DiscreatePlugin } from "../../api/index.js";
-import { Discreate } from "../../api/index.js";
-import { findStore } from "../../core/webpack.js";
-import { makeLogger } from "../../core/logger.js";
 
 const log = makeLogger("ReadAll");
 const BUTTON_ID = "discreate-readall-btn";

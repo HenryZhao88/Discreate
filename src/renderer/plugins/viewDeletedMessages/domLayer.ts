@@ -19,7 +19,7 @@ export function setLocalDeleteHandler(fn: (channelId: string, messageId: string)
 
 export function markDeleted(channelId: string, messageId: string): void {
   deletedIds.add(`${channelId}-${messageId}`);
-  augmentAll();
+  scheduleAugment();
 }
 
 export function unmarkDeleted(channelId: string, messageId: string): void {
@@ -84,7 +84,9 @@ function augmentRow(row: HTMLElement): void {
   const history = editHistory.get(ids.messageId);
   const existingMarker = row.querySelector(`.${MARKER_CLASS}`);
   if (history?.length) {
-    if (!existingMarker) {
+    if (existingMarker) {
+      existingMarker.textContent = `(edited ×${history.length})`;
+    } else {
       const marker = document.createElement("span");
       marker.className = MARKER_CLASS;
       marker.textContent = `(edited ×${history.length})`;

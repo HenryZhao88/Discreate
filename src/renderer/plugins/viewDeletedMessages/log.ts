@@ -109,6 +109,13 @@ export function removeDeleted(messageId: string): void {
   writeLog(log);
 }
 
+/** Remove an edit record by message id (used by "delete locally"). */
+export function removeEdit(messageId: string): void {
+  const log = readLog();
+  log.edits = log.edits.filter((e) => e.messageId !== messageId);
+  writeLog(log);
+}
+
 export function clearLog(): void {
   writeLog({ deleted: [], edits: [] });
   editHistory.clear();

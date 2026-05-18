@@ -5,7 +5,7 @@ import { findByProps, findByPropsLazy, findStore } from "../../core/webpack.js";
 import { instead } from "../../core/patcher.js";
 import { makeLogger } from "../../core/logger.js";
 import { native } from "../../core/paths.js";
-import { recordDeleted, recordEdit, removeDeleted, editHistory, makeEditEntry as makeEditEntryFromStore } from "./log.js";
+import { recordDeleted, recordEdit, removeDeleted, removeEdit, editHistory, makeEditEntry as makeEditEntryFromStore } from "./log.js";
 import { startDomLayer, stopDomLayer, markDeleted, unmarkDeleted, setLocalDeleteHandler } from "./domLayer.js";
 import type { EditEntry } from "./log.js";
 
@@ -236,6 +236,7 @@ const plugin: DiscreatePlugin = {
         unmarkDeleted(channelId, messageId);
         editHistory.delete(messageId);
         removeDeleted(messageId);
+        removeEdit(messageId);
         // Dispatch a genuine MESSAGE_DELETE so Discord's stores drop the message.
         // `discreateLocalDelete` lets our own interceptor recognise and pass it.
         Dispatcher.dispatch({ type: "MESSAGE_DELETE", channelId, id: messageId, discreateLocalDelete: true });

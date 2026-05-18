@@ -359,14 +359,21 @@ export function injectSettings(deps: Deps): void {
         main.className = "dc-row-main";
         const label = document.createElement("div");
         label.className = "dc-row-label";
-        label.textContent = `${e.kind === "deleted" ? "🗑" : "✏️"} ${e.author}`;
+        label.textContent = `${e.kind === "deleted" ? "🗑" : "✏️"} ${e.author} · ${new Date(e.timestamp).toLocaleString()}`;
         const desc = document.createElement("div");
         desc.className = "dc-row-desc";
         desc.textContent = e.kind === "deleted"
           ? e.content
           : e.history.map((h: { content: string }) => h.content).join("  →  ");
         main.append(label, desc);
-        r.append(main);
+        const delBtn = mkBtn("Delete", () => {
+          void import("../plugins/viewDeletedMessages/log.js").then((mod) => {
+            if (e.kind === "deleted") mod.removeDeleted(e.messageId);
+            else mod.removeEdit(e.messageId);
+            renderBody();
+          });
+        }, "danger");
+        r.append(main, delBtn);
         body.appendChild(r);
       }
     });
