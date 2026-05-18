@@ -110,7 +110,15 @@ let chunksForceLoaded = false;
  * the now-populated module cache so finders can see the new exports.
  */
 export async function forceLoadAllChunks(): Promise<void> {
-  if (chunksForceLoaded || !wpRequire?.e) return;
+  if (chunksForceLoaded) return;
+  // wpRequire is captured lazily, the first time Discord pushes a chunk. We
+  // may be called before that happens — wait for it to appear so we can
+  // actually enumerate factories. Bail out after 15s if it never shows.
+  const deadline = Date.now() + 15000;
+  while (!wpRequire?.e && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  if (!wpRequire?.e) return;
   chunksForceLoaded = true;
 
   // `wpRequire.u(id)` returns the chunk filename for `id`, but it throws for
@@ -152,14 +160,41 @@ export async function forceLoadAllChunks(): Promise<void> {
   log(`force-loading ${ids.length} chunks…`);
 
   // Trigger each chunk; swallow individual failures so one broken chunk doesn't
-  // stop the rest. Then re-scan the require cache.
+  // stop the rest.
   await Promise.all(
     ids.map((id) =>
       Promise.resolve(wpRequire.e(id)).catch(() => undefined),
     ),
   );
+
+  // Fetching a chunk only populates `__webpack_require__.m` (the factory map)
+  // with new factories — it does NOT evaluate them. BD plugins like
+  // MessageLoggerV2 expect every Flux store to be reachable at boot, which
+  // requires the factories to actually run. Evaluate them all, mirroring
+  // BetterDiscord's "load every module" behaviour. Some factories will throw
+  // (circular deps, missing globals); swallow and continue.
+  await evaluateAllFactories();
   ingestCacheFromRequire();
   log("force-load done");
+}
+
+let factoriesEvaluated = false;
+
+async function evaluateAllFactories(): Promise<void> {
+  if (factoriesEvaluated || !wpRequire?.m) return;
+  factoriesEvaluated = true;
+  const ids = Object.keys(wpRequire.m);
+  let ok = 0, fail = 0;
+  // Run in small async batches so we yield to Discord and don't block the UI
+  // for too long. 100 modules per microtask is responsive yet fast.
+  for (let i = 0; i < ids.length; i += 100) {
+    const slice = ids.slice(i, i + 100);
+    for (const id of slice) {
+      try { wpRequire(id); ok++; } catch { fail++; }
+    }
+    await Promise.resolve();
+  }
+  makeRendererLogger("webpack")(`evaluated ${ok}/${ids.length} factories (${fail} failed)`);
 }
 
 function makeRendererLogger(tag: string): (...a: any[]) => void {

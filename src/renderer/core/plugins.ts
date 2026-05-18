@@ -2,6 +2,7 @@
 import { makeLogger } from "./logger.js";
 import { unpatchAll } from "./patcher.js";
 import { native } from "./paths.js";
+import { findByPropsLazy } from "./webpack.js";
 import type { SettingsStore } from "./settings.js";
 import type { DiscreatePlugin, PluginContext } from "../api/index.js";
 
@@ -244,14 +245,67 @@ function wrapBdInstance(instance: any, meta: BdMeta): DiscreatePlugin {
     description: meta.description,
     authors: meta.author ? [meta.author] : [],
     start() {
-      try { instance.load?.(); } catch (e) { log.warn(`${meta.name}.load() threw:`, e); }
-      try { instance.start?.(); } catch (e) { log.error(`${meta.name}.start() threw:`, e); }
+      // BD plugins assume every Discord store/module is reachable at boot.
+      // Modern Discord lazy-loads MessageStore until the user enters a
+      // channel — so until that happens, the plugin's initialize() will
+      // throw on a MessageStore lookup. Wait for the store to appear (a
+      // CHANNEL_SELECT loads the relevant chunk), then call start().
+      void waitForMessageStore().then(() => {
+        try { instance.load?.(); } catch (e) { log.warn(`${meta.name}.load() threw:`, e); }
+        try { instance.start?.(); } catch (e) { log.error(`${meta.name}.start() threw:`, e); }
+        appendBdLog(`bd-start ${meta.name} (after MessageStore ready)`);
+      }).catch((e) => log.error(`${meta.name} deferred start failed:`, e));
     },
     stop() {
       try { instance.stop?.(); } catch (e) { log.error(`${meta.name}.stop() threw:`, e); }
       try { instance.unload?.(); } catch (e) { log.warn(`${meta.name}.unload() threw:`, e); }
     },
   };
+}
+
+/**
+ * Resolve once Discord's MessageStore has been loaded (and so its module is
+ * findable). Discord loads MessageStore on first CHANNEL_SELECT — we either
+ * see the store synchronously (it's already there) or wait at most 10 minutes
+ * for a channel-open event. If the user never opens a channel, the deferred
+ * BD-plugin start simply never runs, which is fine.
+ */
+function waitForMessageStore(): Promise<void> {
+  return new Promise((resolve) => {
+    function probe(): boolean {
+      try {
+        const store = findByPropsLazy("getMessage", "getMessages");
+        return !!store;
+      } catch {
+        return false;
+      }
+    }
+    if (probe()) return resolve();
+
+    // Poll every second; resolve on first hit. Also subscribe to
+    // FluxDispatcher CHANNEL_SELECT, which is the canonical trigger.
+    const interval = setInterval(() => {
+      if (probe()) {
+        clearInterval(interval);
+        resolve();
+      }
+    }, 1000);
+
+    try {
+      const dispatcher = (window as any).BdApi?.Webpack?.getByKeys?.("dispatch", "subscribe")
+        ?? (window as any).DiscreateFluxDispatcher;
+      if (dispatcher?.subscribe) {
+        const handler = () => {
+          dispatcher.unsubscribe?.("CHANNEL_SELECT", handler);
+          // give the store one tick to populate after the chunk loads
+          setTimeout(() => {
+            if (probe()) { clearInterval(interval); resolve(); }
+          }, 50);
+        };
+        dispatcher.subscribe("CHANNEL_SELECT", handler);
+      }
+    } catch { /* the polling fallback covers us */ }
+  });
 }
 
 export function loadUserPlugins(manager: PluginManager): void {
