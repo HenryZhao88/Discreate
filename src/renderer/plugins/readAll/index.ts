@@ -44,3 +44,96 @@ export function collectUnreadChannels(stores: ReadAllStores): AckChannel[] {
   }
   return out;
 }
+
+import type { DiscreatePlugin } from "../../api/index.js";
+import { Discreate } from "../../api/index.js";
+import { findStore } from "../../core/webpack.js";
+import { makeLogger } from "../../core/logger.js";
+
+const log = makeLogger("ReadAll");
+const BUTTON_ID = "discreate-readall-btn";
+const STYLE_ID = "discreate-readall-style";
+
+function resolveStores(): ReadAllStores | null {
+  const GuildStore = findStore("GuildStore");
+  const GuildChannelStore = findStore("GuildChannelStore");
+  const ActiveJoinedThreadsStore = findStore("ActiveJoinedThreadsStore");
+  const ReadStateStore = findStore("ReadStateStore");
+  if (!GuildStore || !GuildChannelStore || !ActiveJoinedThreadsStore || !ReadStateStore) {
+    log.error("Read All: a required store is missing");
+    return null;
+  }
+  return { GuildStore, GuildChannelStore, ActiveJoinedThreadsStore, ReadStateStore } as ReadAllStores;
+}
+
+function readAll(): void {
+  const stores = resolveStores();
+  if (!stores) return;
+  const channels = collectUnreadChannels(stores);
+  Discreate.FluxDispatcher?.dispatch({ type: "BULK_ACK", context: "APP", channels });
+  log.log(`Read All — acked ${channels.length} channel(s)`);
+}
+
+function ensureStyles(): void {
+  if (document.getElementById(STYLE_ID)) return;
+  const s = document.createElement("style");
+  s.id = STYLE_ID;
+  s.textContent = `
+    #${BUTTON_ID} {
+      width: 48px; margin: 4px auto 0; padding: 4px 0;
+      font: 600 11px system-ui, sans-serif; cursor: pointer;
+      color: var(--interactive-icon-default, #b5bac1);
+      background: var(--background-secondary, #2b2d31);
+      border: none; border-radius: 8px;
+    }
+    #${BUTTON_ID}:hover {
+      color: #fff; background: var(--brand-experiment, #5865F2);
+    }
+  `;
+  document.head.appendChild(s);
+}
+
+/** Find the guild sidebar's scroll container so we can prepend the button. */
+function guildListContainer(): Element | null {
+  return (
+    document.querySelector('[class*="guilds_"]') ??
+    document.querySelector('nav[aria-label][class*="guilds"]') ??
+    document.querySelector('[class*="itemsContainer"]')
+  );
+}
+
+function injectButton(): void {
+  if (document.getElementById(BUTTON_ID)) return;
+  const container = guildListContainer();
+  if (!container) return;
+  const btn = document.createElement("button");
+  btn.id = BUTTON_ID;
+  btn.textContent = "Read All";
+  btn.addEventListener("click", readAll);
+  container.insertBefore(btn, container.firstChild);
+}
+
+let observer: MutationObserver | null = null;
+
+const plugin: DiscreatePlugin = {
+  name: "Read All",
+  description: "Adds a button above the server list that marks every server's notifications as read.",
+  authors: ["Discreate"],
+  start() {
+    ensureStyles();
+    injectButton();
+    // Discord re-renders the guild sidebar; re-inject the button if it vanishes.
+    observer = new MutationObserver(() => injectButton());
+    observer.observe(document.body, { childList: true, subtree: true });
+    log.log("started");
+  },
+  stop() {
+    observer?.disconnect();
+    observer = null;
+    document.getElementById(BUTTON_ID)?.remove();
+    document.getElementById(STYLE_ID)?.remove();
+    log.log("stopped");
+  },
+};
+
+export default plugin;
