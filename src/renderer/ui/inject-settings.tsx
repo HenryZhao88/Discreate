@@ -99,7 +99,7 @@ function ensureStyles(): void {
   document.head.appendChild(s);
 }
 
-type Tab = "plugins" | "themes" | "about";
+type Tab = "plugins" | "themes" | "messagelog" | "about";
 
 export function injectSettings(deps: Deps): void {
   ensureStyles();
@@ -169,6 +169,7 @@ export function injectSettings(deps: Deps): void {
   }
   mkTab("plugins", "Plugins");
   mkTab("themes", "Themes");
+  mkTab("messagelog", "Message Log");
   mkTab("about", "About");
 
   // ---------- body renderers ----------
@@ -325,6 +326,52 @@ export function injectSettings(deps: Deps): void {
     }
   }
 
+  function renderMessageLog(): void {
+    const toolbar = document.createElement("div");
+    toolbar.className = "dc-toolbar";
+    toolbar.append(
+      mkBtn("Refresh", () => renderBody()),
+      mkBtn("Clear log", () => {
+        if (!confirm("Clear the entire message log?")) return;
+        import("../plugins/viewDeletedMessages/log.js").then((m) => { m.clearLog(); renderBody(); });
+      }, "danger"),
+    );
+    body.replaceChildren(toolbar);
+
+    void import("../plugins/viewDeletedMessages/log.js").then((m) => {
+      const logFile = m.readLog();
+      const entries = [
+        ...logFile.deleted.map((d) => ({ kind: "deleted" as const, ...d })),
+        ...logFile.edits.map((e) => ({ kind: "edited" as const, ...e })),
+      ].sort((a, b) => b.timestamp - a.timestamp);
+
+      if (entries.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "dc-empty";
+        empty.textContent = "No logged messages yet.";
+        body.appendChild(empty);
+        return;
+      }
+      for (const e of entries) {
+        const r = document.createElement("div");
+        r.className = "dc-row";
+        const main = document.createElement("div");
+        main.className = "dc-row-main";
+        const label = document.createElement("div");
+        label.className = "dc-row-label";
+        label.textContent = `${e.kind === "deleted" ? "🗑" : "✏️"} ${e.author}`;
+        const desc = document.createElement("div");
+        desc.className = "dc-row-desc";
+        desc.textContent = e.kind === "deleted"
+          ? e.content
+          : e.history.map((h: { content: string }) => h.content).join("  →  ");
+        main.append(label, desc);
+        r.append(main);
+        body.appendChild(r);
+      }
+    });
+  }
+
   function renderAbout(): void {
     body.replaceChildren();
     const about = document.createElement("div");
@@ -354,6 +401,7 @@ export function injectSettings(deps: Deps): void {
   function renderBody(): void {
     if (currentTab === "plugins") renderPlugins();
     else if (currentTab === "themes") renderThemes();
+    else if (currentTab === "messagelog") renderMessageLog();
     else renderAbout();
   }
 
