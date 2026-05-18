@@ -6,11 +6,11 @@ import { instead } from "../../core/patcher.js";
 import { makeLogger } from "../../core/logger.js";
 import { native } from "../../core/paths.js";
 import { recordDeleted, recordEdit, removeDeleted, editHistory, makeEditEntry as makeEditEntryFromStore } from "./log.js";
+import { startDomLayer, stopDomLayer, markDeleted, unmarkDeleted, setLocalDeleteHandler } from "./domLayer.js";
 import type { EditEntry } from "./log.js";
 
 const log = makeLogger("ViewDeletedMessages");
 const OWNER = "viewDeletedMessages";
-const STYLE_ID = "discreate-vdm-style";
 
 /** Resolve Discord's MessageStore lazily — it loads on first channel open. */
 let messageStoreCache: any = null;
@@ -41,11 +41,6 @@ function retrieveMessage(store: any, channelId: string, messageId: string): { ms
   return { msg: undefined, via: "not-found" };
 }
 
-// IDs of messages we've kept after deletion. Discord renders each message in
-// an element `id="chat-messages-{channelId}-{messageId}"`, so we highlight
-// purely with CSS — no fragile React component patching.
-const deletedIds = new Set<string>();
-
 // --- buffered diagnostic logging -------------------------------------------
 // Synchronous file I/O on Discord's renderer thread is dangerous: on a hot
 // path it freezes the renderer, which Discord then reloads as "unresponsive".
@@ -67,25 +62,6 @@ function flushActivity(): void {
 // Timers / listeners we own, cleared on stop().
 let diagTimers: ReturnType<typeof setInterval>[] = [];
 let unloadHandler: (() => void) | null = null;
-
-function refreshStyle(): void {
-  let el = document.getElementById(STYLE_ID) as HTMLStyleElement | null;
-  if (!el) {
-    el = document.createElement("style");
-    el.id = STYLE_ID;
-    document.head.appendChild(el);
-  }
-  const rules = [...deletedIds]
-    .map(
-      (id) =>
-        `#chat-messages-${id} {\n` +
-        `  background-color: rgba(240, 71, 71, 0.10) !important;\n` +
-        `  border-left: 3px solid #f04747 !important;\n` +
-        `}`,
-    )
-    .join("\n");
-  el.textContent = rules;
-}
 
 const plugin: DiscreatePlugin = {
   name: "View Deleted Messages",
@@ -128,8 +104,7 @@ const plugin: DiscreatePlugin = {
         activity(`  retrieved message via ${via}`);
         try { msg.deleted = true; } catch { /* immutable record */ }
 
-        deletedIds.add(`${channelId}-${messageId}`);
-        refreshStyle();
+        markDeleted(channelId, messageId);
 
         if (logging) {
           recordDeleted({
@@ -251,6 +226,8 @@ const plugin: DiscreatePlugin = {
       return originalDispatch(action);
     });
 
+    startDomLayer();
+
     // Flush the buffered log when the renderer unloads, so a reload never
     // hides the action stream that led up to it.
     unloadHandler = () => { activity("renderer beforeunload"); flushActivity(); };
@@ -268,8 +245,7 @@ const plugin: DiscreatePlugin = {
     }
     activity("plugin stop");
     flushActivity();
-    deletedIds.clear();
-    document.getElementById(STYLE_ID)?.remove();
+    stopDomLayer();
     log.log("stopped");
   },
 };
