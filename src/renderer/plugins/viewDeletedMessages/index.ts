@@ -1,13 +1,14 @@
 // src/renderer/plugins/viewDeletedMessages/index.ts
 import { Discreate } from "../../api/index.js";
 import type { DiscreatePlugin, PluginContext } from "../../api/index.js";
-import { findByProps } from "../../core/webpack.js";
-import { after, instead } from "../../core/patcher.js";
+import { findByProps, findByPropsLazy } from "../../core/webpack.js";
+import { instead } from "../../core/patcher.js";
 import { makeLogger } from "../../core/logger.js";
 import { native } from "../../core/paths.js";
 
 const log = makeLogger("ViewDeletedMessages");
 const OWNER = "viewDeletedMessages";
+const STYLE_ID = "discreate-vdm-style";
 
 interface DeletedRecord {
   channelId: string;
@@ -34,89 +35,139 @@ function appendLog(record: DeletedRecord, cap: number): void {
   native().writeDeletedLog(JSON.stringify(records, null, 2));
 }
 
+/** Resolve Discord's MessageStore lazily — it loads on first channel open. */
+let messageStoreCache: any = null;
+function messageStore(): any {
+  if (messageStoreCache?.getMessage) return messageStoreCache;
+  messageStoreCache =
+    findByProps("getMessage", "getMessages") ??
+    findByPropsLazy("getMessage", "getMessages");
+  return messageStoreCache;
+}
+
+// IDs of messages we've kept after deletion. Discord renders each message in
+// an element `id="chat-messages-{channelId}-{messageId}"`, so we highlight
+// purely with CSS — no fragile React component patching.
+const deletedIds = new Set<string>();
+
+function refreshStyle(): void {
+  let el = document.getElementById(STYLE_ID) as HTMLStyleElement | null;
+  if (!el) {
+    el = document.createElement("style");
+    el.id = STYLE_ID;
+    document.head.appendChild(el);
+  }
+  const rules = [...deletedIds]
+    .map(
+      (id) =>
+        `#chat-messages-${id} {\n` +
+        `  background-color: rgba(240, 71, 71, 0.10) !important;\n` +
+        `  border-left: 3px solid #f04747 !important;\n` +
+        `}`,
+    )
+    .join("\n");
+  el.textContent = rules;
+}
+
 const plugin: DiscreatePlugin = {
   name: "View Deleted Messages",
   description:
-    "Keeps deleted messages visible with a red highlight, logs them, and lets you remove messages from your own view.",
+    "Keeps deleted messages visible with a red highlight and logs every deletion.",
   authors: ["Discreate"],
 
   start(ctx: PluginContext) {
-    const opts = ctx.options as { redHighlight?: boolean; logging?: boolean; logCap?: number };
-    const redHighlight = opts.redHighlight ?? true;
+    const opts = ctx.options as { logging?: boolean; logCap?: number };
     const logging = opts.logging ?? true;
     const logCap = opts.logCap ?? 500;
 
     const Dispatcher = Discreate.FluxDispatcher;
-    const MessageStore = findByProps("getMessage", "getMessages");
+    if (!Dispatcher || typeof Dispatcher.dispatch !== "function") {
+      log.error("FluxDispatcher unavailable — plugin cannot start");
+      return;
+    }
 
-    // 1. Intercept delete actions: mark + keep instead of removing.
-    instead(OWNER, Dispatcher, "dispatch", (args, originalDispatch) => {
-      const action = args[0];
-      if (action?.type === "MESSAGE_DELETE" && !action.__discreateLocal) {
-        const msg = MessageStore?.getMessage(action.channelId, action.id);
-        if (msg) {
-          msg.deleted = true;
-          if (logging) {
-            appendLog({
-              channelId: action.channelId, messageId: action.id,
-              author: msg.author?.username ?? "unknown",
-              content: msg.content ?? "", timestamp: Date.now(),
-            }, logCap);
-          }
-          // Trigger a re-render without removing the message.
-          return originalDispatch({ type: "MESSAGE_UPDATE", message: msg });
+    /**
+     * Capture a single deletion. Returns true if the message was found and
+     * kept (so the dispatch can be swallowed), false if we couldn't handle it
+     * (so the normal delete should proceed).
+     */
+    function keep(channelId: string, messageId: string): boolean {
+      try {
+        const store = messageStore();
+        const msg = store?.getMessage?.(channelId, messageId);
+        if (!msg) {
+          log.warn(`delete ${messageId}: not in store (store found=${!!store?.getMessage})`);
+          return false;
         }
-      }
-      if (action?.type === "MESSAGE_DELETE_BULK") {
-        for (const id of action.ids ?? []) {
-          const msg = MessageStore?.getMessage(action.channelId, id);
-          if (msg) {
-            msg.deleted = true;
-            if (logging) {
-              appendLog({
-                channelId: action.channelId, messageId: id,
-                author: msg.author?.username ?? "unknown",
-                content: msg.content ?? "", timestamp: Date.now(),
-              }, logCap);
-            }
-          }
-        }
-        return; // swallow the bulk removal entirely
-      }
-      return originalDispatch(action);
-    });
+        try { msg.deleted = true; } catch { /* immutable record */ }
 
-    // 2. Red-highlight deleted messages in the rendered row.
-    if (redHighlight) {
-      const MessageRow = findByProps("MessageListItem");
-      if (MessageRow) {
-        after(OWNER, MessageRow, "default", (rowArgs, rowResult) => {
-          const msg = rowArgs[0]?.message;
-          if (msg?.deleted && rowResult?.props) {
-            rowResult.props.style = {
-              ...(rowResult.props.style ?? {}),
-              backgroundColor: "rgba(240, 71, 71, 0.15)",
-              borderLeft: "3px solid #f04747",
-            };
-          }
-          return rowResult;
-        });
-      } else {
-        log.warn("message row module not found; red highlight disabled this session");
+        deletedIds.add(`${channelId}-${messageId}`);
+        refreshStyle();
+
+        if (logging) {
+          appendLog({
+            channelId,
+            messageId,
+            author: msg.author?.username ?? msg.author?.globalName ?? "unknown",
+            content: msg.content ?? "",
+            timestamp: Date.now(),
+          }, logCap);
+        }
+        log.log(`kept deleted message from ${msg.author?.username ?? "?"}: ${(msg.content ?? "").slice(0, 80)}`);
+        return true;
+      } catch (err) {
+        log.error("keep failed:", err);
+        return false;
       }
     }
 
-    // 3. Manual client-side delete: expose a window helper used by the
-    //    context-menu patch below to drop a message from the local store.
-    (window as any).DiscreateLocalDelete = (channelId: string, messageId: string) => {
-      Dispatcher.dispatch({ type: "MESSAGE_DELETE", channelId, id: messageId, __discreateLocal: true });
-    };
+    // Diagnostic file log so we can verify interception without DevTools.
+    let dispatchCount = 0;
+    function activity(line: string): void {
+      try {
+        const n = native();
+        const p = `${n.root}/vdm-activity.log`;
+        n.writeText(p, (n.readText(p) ?? "") + new Date().toISOString() + " " + line + "\n");
+      } catch { /* ignore */ }
+    }
+    activity("plugin start — dispatch patch installed");
 
-    log.log("started");
+    // Intercept the Flux dispatch. On a delete we capture+keep the message and
+    // swallow the action so Discord never removes it from the store/UI.
+    instead(OWNER, Dispatcher, "dispatch", (args, originalDispatch) => {
+      const action = args[0];
+      dispatchCount++;
+      if (dispatchCount === 1) activity("first dispatch intercepted — patch is live");
+
+      if (action?.type === "MESSAGE_DELETE") {
+        activity(`MESSAGE_DELETE seen: channel=${action.channelId} id=${action.id}`);
+        if (keep(action.channelId, action.id)) {
+          activity("  -> kept + swallowed");
+          return undefined; // swallow
+        }
+        activity("  -> could not keep; normal delete");
+        return originalDispatch(action);
+      }
+
+      if (action?.type === "MESSAGE_DELETE_BULK") {
+        activity(`MESSAGE_DELETE_BULK seen: channel=${action.channelId} count=${(action.ids ?? []).length}`);
+        let keptAny = false;
+        for (const id of action.ids ?? []) {
+          if (keep(action.channelId, id)) keptAny = true;
+        }
+        if (keptAny) return undefined; // swallow the bulk removal
+        return originalDispatch(action);
+      }
+
+      return originalDispatch(action);
+    });
+
+    log.log("started — intercepting MESSAGE_DELETE / MESSAGE_DELETE_BULK");
   },
 
   stop() {
-    delete (window as any).DiscreateLocalDelete;
+    deletedIds.clear();
+    document.getElementById(STYLE_ID)?.remove();
     log.log("stopped");
   },
 };

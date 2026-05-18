@@ -1,5 +1,5 @@
 // src/renderer/core/index.ts
-import { initWebpack, findByProps, find, waitFor, byProps, byCode, forceLoadAllChunks } from "./webpack.js";
+import { initWebpack, findByProps, waitFor, byProps, forceLoadAllChunks, findFluxDispatcher } from "./webpack.js";
 import { SettingsStore, nativeBackend } from "./settings.js";
 import { ThemeManager } from "./themes.js";
 import { PluginManager, loadUserPlugins } from "./plugins.js";
@@ -40,19 +40,9 @@ function boot(): void {
       const rdomLegacy = findByProps("render", "unmountComponentAtNode");
       if (rdomClient || rdomLegacy) Discreate.ReactDOM = { ...rdomClient, ...rdomLegacy };
 
-      // The real Flux dispatcher has a uniquely identifiable error message in
-      // its source — "Cannot dispatch in the middle of a dispatch" is straight
-      // from the Flux reference implementation and is present in every
-      // version. This is far more reliable than prop-based finders.
-      Discreate.FluxDispatcher = find(byCode("Cannot dispatch in the middle of a dispatch"));
-      // Fall back to prop-based finders just in case the error text changed.
-      if (!Discreate.FluxDispatcher) {
-        Discreate.FluxDispatcher =
-          findByProps("dispatch", "subscribe", "register") ??
-          findByProps("dispatch", "subscribe", "_actionHandlers") ??
-          findByProps("dispatch", "subscribe", "_subscriptions") ??
-          findByProps("dispatch", "subscribe");
-      }
+      // Locate the live FluxDispatcher *instance* via a Flux store's
+      // `_dispatcher` back-reference.
+      Discreate.FluxDispatcher = findFluxDispatcher();
       log.log(`bootstrap modules — FluxDispatcher: ${Discreate.FluxDispatcher ? "ok" : "MISSING"}, ReactDOM: ${Discreate.ReactDOM ? "ok" : "MISSING"}`);
 
       setPluginManagerRef(plugins);

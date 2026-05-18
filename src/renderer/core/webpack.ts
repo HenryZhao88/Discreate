@@ -373,6 +373,88 @@ function findByFactorySourceImpl(fragments: string[], drill: boolean): any {
   return undefined;
 }
 
+/**
+ * Locate Discord's live FluxDispatcher *instance* (not the class).
+ *
+ * Direct lookup is unreliable: the dispatcher isn't a clean top-level export,
+ * and Discord's `IntlMessagesProxy` answers `dispatch`/`subscribe` truthy for
+ * every property so it floods prop-based finders.
+ *
+ * Instead we go through a Flux *store*. Every Flux store instance holds a
+ * `_dispatcher` reference back to the singleton dispatcher. Stores are easy
+ * to find by their distinctive methods, so we find one and read `_dispatcher`.
+ */
+export function findFluxDispatcher(): any {
+  // Candidate store finders — any one resolving gives us `_dispatcher`.
+  const storeFilters: ModuleFilter[] = [
+    byProps("getCurrentUser", "getUser"),       // UserStore
+    byProps("getChannel", "hasChannel"),        // ChannelStore
+    byProps("getGuild", "getGuilds"),           // GuildStore
+    byProps("getMessage", "getMessages"),       // MessageStore
+    byProps("isDeveloper"),                     // DeveloperExperimentStore etc.
+  ];
+  for (const filter of storeFilters) {
+    const store = find(filter);
+    const dispatcher = store?._dispatcher;
+    if (dispatcher && typeof dispatcher.dispatch === "function") {
+      return dispatcher;
+    }
+  }
+  // Fallback: scan every cached object for a `_dispatcher` with a callable
+  // dispatch. The first store we hit hands us the singleton.
+  let found: any;
+  find((mod) => {
+    if (found) return true;
+    const d = mod?._dispatcher;
+    if (d && typeof d === "object" && typeof d.dispatch === "function" &&
+        typeof d.subscribe === "function" && !isIntlMessagesProxy(d)) {
+      found = d;
+      return true;
+    }
+    return false;
+  });
+  return found;
+}
+
+/** DEBUG: describe every cached module exposing dispatch + subscribe. */
+export function debugDumpDispatchers(): string[] {
+  const out: string[] = [];
+  const seen = new Set<any>();
+  function consider(m: any, src: string): void {
+    if (!m || typeof m !== "object" || seen.has(m)) return;
+    seen.add(m);
+    if (typeof m.dispatch === "function" && typeof m.subscribe === "function") {
+      let keys: string[] = [];
+      try { keys = Object.keys(m); } catch { /* ignore */ }
+      let protoKeys: string[] = [];
+      try { protoKeys = Object.getOwnPropertyNames(Object.getPrototypeOf(m) ?? {}); } catch { /* ignore */ }
+      out.push(
+        `[${src}] tag=${Object.prototype.toString.call(m)} ` +
+        `ownKeys=[${keys.slice(0, 20).join(",")}] ` +
+        `protoKeys=[${protoKeys.slice(0, 20).join(",")}]`,
+      );
+    }
+  }
+  for (const mod of cache) {
+    consider(mod, "cache");
+    if (mod && typeof mod === "object") {
+      try { consider(mod.default, "cache.default"); } catch { /* ignore */ }
+    }
+  }
+  if (wpRequire?.c) {
+    for (const id of Object.keys(wpRequire.c)) {
+      const ex = wpRequire.c[id]?.exports;
+      if (!ex) continue;
+      consider(ex, `c[${id}]`);
+      if (typeof ex === "object") {
+        try { consider(ex.default, `c[${id}].default`); } catch { /* ignore */ }
+      }
+    }
+  }
+  out.unshift(`-- ${out.length} dispatch+subscribe objects, cache=${cache.length}, c=${wpRequire?.c ? Object.keys(wpRequire.c).length : 0} --`);
+  return out;
+}
+
 export function waitFor(filter: ModuleFilter, cb: (mod: any) => void): void {
   const existing = find(filter);
   if (existing) return cb(existing);
