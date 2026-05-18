@@ -41,6 +41,8 @@ export function capEntries<T>(entries: T[], cap: number): T[] {
 export function makeEditEntry(oldMsg: any, newMsg: any): EditEntry | null {
   if (!oldMsg || !newMsg) return null;
   if (!newMsg.edited_timestamp) return null;
+  // A partial MESSAGE_UPDATE can omit `content`; that is not a content edit.
+  if (newMsg.content === undefined) return null;
   if (oldMsg.content === newMsg.content) return null;
   const parsed = Date.parse(newMsg.edited_timestamp);
   return {
