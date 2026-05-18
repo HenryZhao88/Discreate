@@ -77,16 +77,23 @@ function augmentRow(row: HTMLElement): void {
 
   if (deletedIds.has(`${ids.channelId}-${ids.messageId}`)) {
     row.classList.add(DELETED_CLASS);
+  } else {
+    row.classList.remove(DELETED_CLASS);
   }
 
   const history = editHistory.get(ids.messageId);
-  if (history?.length && !row.querySelector(`.${MARKER_CLASS}`)) {
-    const marker = document.createElement("span");
-    marker.className = MARKER_CLASS;
-    marker.textContent = `(edited ×${history.length})`;
-    marker.addEventListener("click", (e) => showEditPopover(e, ids.messageId));
-    // Append after the message content node if present, else to the row.
-    (row.querySelector('[class*="messageContent"]') ?? row).appendChild(marker);
+  const existingMarker = row.querySelector(`.${MARKER_CLASS}`);
+  if (history?.length) {
+    if (!existingMarker) {
+      const marker = document.createElement("span");
+      marker.className = MARKER_CLASS;
+      marker.textContent = `(edited ×${history.length})`;
+      marker.addEventListener("click", (e) => showEditPopover(e, ids.messageId));
+      // Append after the message content node if present, else to the row.
+      (row.querySelector('[class*="messageContent"]') ?? row).appendChild(marker);
+    }
+  } else if (existingMarker) {
+    existingMarker.remove();
   }
 }
 
@@ -94,6 +101,17 @@ function augmentAll(): void {
   for (const row of document.querySelectorAll<HTMLElement>('[id^="chat-messages-"]')) {
     augmentRow(row);
   }
+}
+
+let augmentScheduled = false;
+/** Coalesce mutation bursts into one augment pass per animation frame. */
+function scheduleAugment(): void {
+  if (augmentScheduled) return;
+  augmentScheduled = true;
+  requestAnimationFrame(() => {
+    augmentScheduled = false;
+    augmentAll();
+  });
 }
 
 function showEditPopover(e: MouseEvent, messageId: string): void {
@@ -107,7 +125,7 @@ function showEditPopover(e: MouseEvent, messageId: string): void {
       `<div class="ts">${new Date(h.time).toLocaleString()}</div></div>`)
     .join("") || "<div class='ver'>No history</div>";
   pop.style.left = `${Math.min(e.clientX, window.innerWidth - 440)}px`;
-  pop.style.top = `${e.clientY + 8}px`;
+  pop.style.top = `${Math.min(e.clientY + 8, window.innerHeight - 220)}px`;
   document.body.appendChild(pop);
   const close = (ev: MouseEvent) => {
     if (!pop.contains(ev.target as Node)) { pop.remove(); document.removeEventListener("click", close, true); }
@@ -153,9 +171,10 @@ function onContextMenu(e: MouseEvent): void {
 }
 
 export function startDomLayer(): void {
+  if (observer) return;
   ensureStyles();
   augmentAll();
-  observer = new MutationObserver(() => augmentAll());
+  observer = new MutationObserver(() => scheduleAugment());
   observer.observe(document.body, { childList: true, subtree: true });
   document.addEventListener("contextmenu", onContextMenu, true);
 }
