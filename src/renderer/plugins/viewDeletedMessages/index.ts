@@ -5,35 +5,12 @@ import { findByProps, findByPropsLazy, findStore } from "../../core/webpack.js";
 import { instead } from "../../core/patcher.js";
 import { makeLogger } from "../../core/logger.js";
 import { native } from "../../core/paths.js";
+import { recordDeleted, recordEdit, removeDeleted, editHistory, makeEditEntry as makeEditEntryFromStore } from "./log.js";
+import type { EditEntry } from "./log.js";
 
 const log = makeLogger("ViewDeletedMessages");
 const OWNER = "viewDeletedMessages";
 const STYLE_ID = "discreate-vdm-style";
-
-interface DeletedRecord {
-  channelId: string;
-  messageId: string;
-  author: string;
-  content: string;
-  timestamp: number;
-}
-
-function loadLog(): DeletedRecord[] {
-  const raw = native().readDeletedLog();
-  if (!raw) return [];
-  try {
-    return JSON.parse(raw) as DeletedRecord[];
-  } catch {
-    return [];
-  }
-}
-
-function appendLog(record: DeletedRecord, cap: number): void {
-  const records = loadLog();
-  records.push(record);
-  while (records.length > cap) records.shift();
-  native().writeDeletedLog(JSON.stringify(records, null, 2));
-}
 
 /** Resolve Discord's MessageStore lazily — it loads on first channel open. */
 let messageStoreCache: any = null;
@@ -155,7 +132,7 @@ const plugin: DiscreatePlugin = {
         refreshStyle();
 
         if (logging) {
-          appendLog({
+          recordDeleted({
             channelId,
             messageId,
             author: msg.author?.username ?? msg.author?.globalName ?? "unknown",
@@ -240,6 +217,34 @@ const plugin: DiscreatePlugin = {
           traceUntil = Date.now() + 10000;
           return dispatchInert(originalDispatch, action);
         }
+        return originalDispatch(action);
+      }
+
+      if (action?.type === "MESSAGE_UPDATE" && action.message) {
+        try {
+          const updated = action.message;
+          const store = messageStore();
+          const old = store?.getMessage?.(updated.channel_id, updated.id);
+          const entry: EditEntry | null = old ? makeEditEntryFromStore(old, updated) : null;
+          if (entry) {
+            const list = editHistory.get(updated.id) ?? [];
+            list.push(entry);
+            editHistory.set(updated.id, list);
+            if (logging) {
+              recordEdit({
+                channelId: updated.channel_id,
+                messageId: updated.id,
+                author: updated.author?.username ?? old?.author?.username ?? "unknown",
+                history: list,
+                timestamp: Date.now(),
+              }, logCap);
+            }
+            activity(`MESSAGE_UPDATE edit recorded for ${updated.id} (${list.length} versions)`);
+          }
+        } catch (err) {
+          log.error("edit capture failed:", err);
+        }
+        // Edits are NOT swallowed — let the message update normally.
         return originalDispatch(action);
       }
 
