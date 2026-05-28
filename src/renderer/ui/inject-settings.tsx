@@ -242,14 +242,15 @@ export function injectSettings(deps: Deps): void {
     }
     for (const entry of all) {
       const extra: HTMLElement[] = [];
-      if (entry.source === "user") {
+      if (entry.source === "user" && entry.path) {
         extra.push(
           mkBtn("Delete", () => {
             if (!confirm(`Delete plugin "${entry.plugin.name}"? This removes the file.`)) return;
             try {
-              const file = `${native().pluginsDir}/${entry.id}.plugin.js`;
-              native().deleteFile(file);
-              alert("Deleted. Restart Discord to unload it.");
+              deps.plugins.setEnabled(entry.id, false);
+              native().deleteFile(entry.path!);
+              deps.plugins.unregister(entry.id);
+              alert("Deleted. Restart Discord to fully unload it.");
               renderBody();
             } catch (e: any) {
               alert("Delete failed: " + (e?.message ?? e));

@@ -12,7 +12,7 @@ function fixtureStores() {
     },
     ActiveJoinedThreadsStore: { getActiveJoinedThreadsForGuild: (_g: string) => ({}) },
     ReadStateStore: {
-      hasUnread: (id: string) => id === "c1" || id === "v1",
+      hasUnread: ((id: string) => id === "c1" || id === "v1") as (id: string) => boolean,
       lastMessageId: (id: string) => `last-${id}`,
     },
   };
