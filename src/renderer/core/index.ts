@@ -9,6 +9,11 @@ import { installBdApi, setPluginManagerRef } from "../api/bd-api.js";
 import { injectSettings } from "../ui/inject-settings.js";
 import viewDeletedMessages from "../plugins/viewDeletedMessages/index.js";
 import readAll from "../plugins/readAll/index.js";
+import forceOwnerCrown from "../plugins/forceOwnerCrown/index.js";
+import memberCount from "../plugins/memberCount/index.js";
+import relationshipNotifier from "../plugins/relationshipNotifier/index.js";
+import showHiddenChannels from "../plugins/showHiddenChannels/index.js";
+import showHiddenThings from "../plugins/showHiddenThings/index.js";
 
 const log = makeLogger("core");
 
@@ -22,6 +27,11 @@ function boot(): void {
 
   plugins.register("viewDeletedMessages", viewDeletedMessages, "builtin");
   plugins.register("readAll", readAll, "builtin");
+  plugins.register("forceOwnerCrown", forceOwnerCrown, "builtin");
+  plugins.register("memberCount", memberCount, "builtin");
+  plugins.register("relationshipNotifier", relationshipNotifier, "builtin");
+  plugins.register("showHiddenChannels", showHiddenChannels, "builtin");
+  plugins.register("showHiddenThings", showHiddenThings, "builtin");
 
   // Wait for Discord's React and FluxDispatcher before installing BdApi,
   // loading user plugins (BD plugins need window.BdApi during evaluation),
