@@ -1,5 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { byProps, byCode, byStoreName, searchModules, findIn } from "../../src/renderer/core/webpack";
+import {
+  byProps,
+  byCode,
+  byStoreName,
+  searchModules,
+  findIn,
+  findByFactorySourceExport,
+  getWebpackFactorySource,
+  getWebpackModuleById,
+  initWebpack,
+  waitForMainWebpack,
+} from "../../src/renderer/core/webpack";
 
 describe("webpack finders", () => {
   const modules = [
@@ -64,5 +75,61 @@ describe("findIn — mangled export drilling", () => {
     Object.defineProperty(evil, "boom", { get() { throw new Error("nope"); }, enumerable: true });
     const store = { getUser: () => {} };
     expect(findIn([evil, { Z: store }], byProps("getUser"))).toBe(store);
+  });
+});
+
+describe("webpack factory wrapping", () => {
+  it("reads the original Discord factory source through a wrapper", () => {
+    const original = function discordFactory() { return "GUILD_ONBOARDING_QUESTION"; };
+    const wrapper = () => undefined;
+    Object.defineProperty(wrapper, Symbol.for("discreate.originalWebpackFactory"), {
+      value: original,
+    });
+
+    expect(getWebpackFactorySource(wrapper)).toContain("GUILD_ONBOARDING_QUESTION");
+    expect(getWebpackFactorySource(wrapper)).not.toContain("undefined");
+  });
+
+  it("selects Discord's main /assets/ runtime over an auxiliary runtime", async () => {
+    const action = function markGuildsRead() {
+      return "getSelectableChannelIds GUILD_ONBOARDING_QUESTION MARK_AS_READ";
+    };
+    const factory = function discordFactory() {
+      return "getSelectableChannelIds GUILD_ONBOARDING_QUESTION MARK_AS_READ";
+    };
+    const fakeRequire: any = () => ({ A: action });
+    fakeRequire.c = {};
+    fakeRequire.m = { 42: factory };
+    const chunk: any[] = [];
+    chunk.push = ((item: any) => {
+      item[2]?.(fakeRequire);
+      return 1;
+    }) as any;
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = { webpackChunkdiscord_app: chunk };
+
+    try {
+      initWebpack();
+      expect(findByFactorySourceExport(
+        "getSelectableChannelIds",
+        "GUILD_ONBOARDING_QUESTION",
+        "MARK_AS_READ",
+      )).toBe(action);
+      expect(getWebpackModuleById(42)?.A).toBe(action);
+
+      const mainAction = function mainMarkGuildsRead() {
+        return "getSelectableChannelIds GUILD_ONBOARDING_QUESTION MARK_AS_READ";
+      };
+      const mainRequire: any = () => ({ A: mainAction });
+      mainRequire.m = { 42: factory };
+      mainRequire.c = {};
+      mainRequire.e = () => Promise.resolve();
+      mainRequire.p = "/assets/";
+      await waitForMainWebpack(100);
+
+      expect(getWebpackModuleById(42)?.A).toBe(mainAction);
+    } finally {
+      (globalThis as any).window = previousWindow;
+    }
   });
 });

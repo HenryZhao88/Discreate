@@ -5,9 +5,52 @@ import type { SettingsStore } from "./settings.js";
 
 const log = makeLogger("themes");
 const STYLE_PREFIX = "discreate-theme-";
+const CACHE_DIR = "theme-cache";
 
 // Cache resolved `@import url(...)` bodies so we don't re-fetch on hot-reload.
 const importCache = new Map<string, string>();
+
+function cacheKey(url: string): string {
+  // FNV-1a: stable, short, and available in the renderer without Node crypto.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < url.length; i++) {
+    hash ^= url.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function cachedImport(url: string): string | null {
+  try {
+    return native().readText(`${native().root}/${CACHE_DIR}/${cacheKey(url)}.css`);
+  } catch {
+    return null;
+  }
+}
+
+function cacheImport(url: string, css: string): void {
+  try {
+    native().writeText(`${native().root}/${CACHE_DIR}/${cacheKey(url)}.css`, css);
+  } catch (err) {
+    log.warn(`could not cache theme import ${url}:`, err);
+  }
+}
+
+/** GitHub Pages occasionally fails while raw.githubusercontent.com is healthy. */
+export function importCandidates(url: string): string[] {
+  try {
+    const parsed = new URL(url);
+    const match = parsed.hostname.match(/^([^.]+)\.github\.io$/i);
+    const [, repo, ...rest] = parsed.pathname.split("/");
+    if (match && repo && rest.length) {
+      return [
+        `https://raw.githubusercontent.com/${match[1]}/${repo}/HEAD/${rest.join("/")}`,
+        url,
+      ];
+    }
+  } catch { /* leave malformed/non-GitHub URLs unchanged */ }
+  return [url];
+}
 
 /**
  * BetterDiscord-style themes commonly do `@import url("https://.../main.css")`
@@ -33,14 +76,33 @@ async function inlineImports(css: string, depth = 0): Promise<string> {
     } else {
       try {
         // Fetch via the main process — Discord's renderer CSP blocks direct fetch().
-        const body = await native().fetchText(t.url);
+        let body: string | null = null;
+        let lastError: unknown;
+        for (const candidate of importCandidates(t.url)) {
+          try {
+            body = await native().fetchText(candidate);
+            break;
+          } catch (err) {
+            lastError = err;
+          }
+        }
+        if (body == null) throw lastError ?? new Error("no import URL succeeded");
         // Recurse: imported sheet may itself contain imports.
         replacement = await inlineImports(body, depth + 1);
         importCache.set(t.url, replacement);
+        cacheImport(t.url, replacement);
       } catch (err) {
-        log.warn(`@import fetch failed for ${t.url}: ${err}`);
-        replacement = `/* @import ${t.url} failed: ${err} */`;
-        importCache.set(t.url, replacement);
+        const previous = cachedImport(t.url);
+        if (previous != null) {
+          log.warn(`@import refresh failed for ${t.url}; using cached copy: ${err}`);
+          replacement = previous;
+          importCache.set(t.url, replacement);
+        } else {
+          // Keep the original import as a final browser-level fallback instead
+          // of permanently caching an empty failure for this session.
+          log.warn(`@import fetch failed for ${t.url}: ${err}`);
+          replacement = t.raw;
+        }
       }
     }
     css = css.replace(t.raw, replacement);

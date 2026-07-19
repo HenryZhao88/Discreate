@@ -121,8 +121,95 @@ export function findIn(modules: any[], filter: ModuleFilter): any {
 // --- live webpack hook (exercised inside Discord, not in unit tests) ---
 
 let wpRequire: any = null;
+const webpackRequires = new Set<any>();
 const cache: any[] = [];
 const waiters: { filter: ModuleFilter; cb: (mod: any) => void }[] = [];
+const ORIGINAL_FACTORY = Symbol.for("discreate.originalWebpackFactory");
+
+function webpackRequireScore(require: any): number {
+  if (typeof require !== "function") return -1;
+  let score = 0;
+  if (require.p === "/assets/") score += 1_000_000;
+  if (require.c && typeof require.c === "object") score += 100_000;
+  if (typeof require.e === "function") score += 10_000;
+  if (require.m && typeof require.m === "object") {
+    try { score += Math.min(Object.keys(require.m).length, 9_999); } catch { /* ignore */ }
+  }
+  return score;
+}
+
+function selectBestWebpackRequire(): void {
+  let best = wpRequire;
+  for (const candidate of webpackRequires) {
+    if (webpackRequireScore(candidate) > webpackRequireScore(best)) best = candidate;
+  }
+  if (!best || best === wpRequire) return;
+  wpRequire = best;
+  // Do not let exports collected from an auxiliary runtime shadow Discord's
+  // main stores. The selected runtime's live cache is authoritative.
+  cache.length = 0;
+  ingestCacheFromRequire();
+  makeRendererLogger("webpack")(
+    `selected runtime p=${String(wpRequire.p)}, factories=${Object.keys(wpRequire.m ?? {}).length}, cache=${Object.keys(wpRequire.c ?? {}).length}`,
+  );
+}
+
+function registerWebpackRequire(require: any): void {
+  if (typeof require !== "function") return;
+  webpackRequires.add(require);
+  selectBestWebpackRequire();
+  // `m`, `c`, and `p` are assigned at different points during bootstrap.
+  // Re-score after those assignments have had a chance to complete.
+  for (const delay of [0, 50, 250, 1000]) {
+    setTimeout(selectBestWebpackRequire, delay);
+  }
+}
+
+function installWebpackInstanceCapture(): void {
+  const proto = Function.prototype as any;
+  const descriptor = Object.getOwnPropertyDescriptor(proto, "m");
+  if (descriptor && !descriptor.configurable) return;
+  Object.defineProperty(proto, "m", {
+    configurable: true,
+    enumerable: false,
+    set(this: any, modules: any) {
+      Object.defineProperty(this, "m", {
+        value: modules,
+        writable: true,
+        configurable: true,
+        enumerable: true,
+      });
+      registerWebpackRequire(this);
+    },
+  });
+}
+
+export async function waitForMainWebpack(timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    selectBestWebpackRequire();
+    const factoryCount = wpRequire?.m ? Object.keys(wpRequire.m).length : 0;
+    if (wpRequire?.p === "/assets/" && wpRequire?.c && factoryCount > 1000) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  selectBestWebpackRequire();
+}
+
+/** Read Discord's factory source even after initWebpack has wrapped it. */
+export function getWebpackFactorySource(factory: any): string {
+  const original = factory?.[ORIGINAL_FACTORY] ?? factory;
+  return Function.prototype.toString.call(original);
+}
+
+/** Require a known module from Discord's currently loaded bundle. */
+export function getWebpackModuleById(id: string | number): any {
+  if (!wpRequire) return undefined;
+  try {
+    return wpRequire(String(id));
+  } catch {
+    return undefined;
+  }
+}
 
 function notifyWaiters(exports: any): void {
   if (!exports) return;
@@ -184,6 +271,7 @@ let chunksForceLoaded = false;
  */
 export async function forceLoadAllChunks(): Promise<void> {
   if (chunksForceLoaded) return;
+  await waitForMainWebpack();
   // wpRequire is captured lazily, the first time Discord pushes a chunk. We
   // may be called before that happens — wait for it to appear so we can
   // actually enumerate factories. Bail out after 15s if it never shows.
@@ -213,7 +301,7 @@ export async function forceLoadAllChunks(): Promise<void> {
       const fn = factories[id];
       if (typeof fn !== "function") continue;
       let src: string;
-      try { src = Function.prototype.toString.call(fn); } catch { continue; }
+      try { src = getWebpackFactorySource(fn); } catch { continue; }
       for (const m of src.matchAll(re)) chunkIds.add(m[1]);
     }
   } catch { /* ignore */ }
@@ -230,15 +318,24 @@ export async function forceLoadAllChunks(): Promise<void> {
 
   const ids = [...chunkIds];
   const log = makeRendererLogger("webpack");
-  log(`force-loading ${ids.length} chunks…`);
+  const loadLazyChunks = ids.length <= 256;
+  if (loadLazyChunks) log(`force-loading ${ids.length} chunks…`);
+  else {
+    log(`skipping ${ids.length} lazy chunks; using the live main-bundle cache`);
+    ingestCacheFromRequire();
+    log("force-load done");
+    return;
+  }
 
   // Trigger each chunk; swallow individual failures so one broken chunk doesn't
   // stop the rest.
-  await Promise.all(
-    ids.map((id) =>
-      Promise.resolve(wpRequire.e(id)).catch(() => undefined),
-    ),
-  );
+  if (loadLazyChunks) {
+    await Promise.all(
+      ids.map((id) =>
+        Promise.resolve(wpRequire.e(id)).catch(() => undefined),
+      ),
+    );
+  }
 
   // Fetching a chunk only populates `__webpack_require__.m` (the factory map)
   // with new factories — it does NOT evaluate them. BD plugins like
@@ -275,6 +372,7 @@ function makeRendererLogger(tag: string): (...a: any[]) => void {
 }
 
 export function initWebpack(): void {
+  installWebpackInstanceCapture();
   const key = "webpackChunkdiscord_app";
   const chunk: any[] = (window as any)[key] ?? ((window as any)[key] = []);
   const originalPush = chunk.push.bind(chunk);
@@ -282,20 +380,35 @@ export function initWebpack(): void {
     const modules = item[1];
     if (modules) {
       for (const id of Object.keys(modules)) {
-        const original = modules[id];
-        modules[id] = (mod: any, mExports: any, require: any) => {
-          if (!wpRequire && require) {
-            wpRequire = require;
-            ingestCacheFromRequire();
-          }
+        const original = modules[id]?.[ORIGINAL_FACTORY] ?? modules[id];
+        const wrapped = (mod: any, mExports: any, require: any) => {
+          registerWebpackRequire(require);
           original(mod, mExports, require);
           if (mod?.exports) collect(mod.exports);
           if (mExports && mExports !== mod?.exports) collect(mExports);
         };
+        Object.defineProperty(wrapped, ORIGINAL_FACTORY, { value: original });
+        modules[id] = wrapped;
       }
     }
     return originalPush(item);
   };
+
+  // Capture the runtime immediately. Waiting for a later module factory to
+  // execute is unreliable once Discord's initial chunks have already loaded,
+  // and leaves `wpRequire` null even though the module cache is available.
+  // Webpack invokes the third tuple member with its live require function.
+  try {
+    originalPush([
+      [`discreate_capture_${Date.now()}`],
+      {},
+      (require: any) => {
+        registerWebpackRequire(require);
+      },
+    ]);
+  } catch (err) {
+    makeRendererLogger("webpack")("immediate runtime capture failed", err);
+  }
 }
 
 /**
@@ -304,8 +417,8 @@ export function initWebpack(): void {
  * modules that loaded before initWebpack ran.
  */
 export function find(filter: ModuleFilter): any {
-  const cached = findIn(cache, filter);
-  if (cached !== undefined) return cached;
+  // Prefer the selected main runtime's cache. The auxiliary runtime cache can
+  // contain same-named disconnected store proxies.
   if (wpRequire?.c) {
     const c = wpRequire.c;
     const live: any[] = [];
@@ -313,9 +426,10 @@ export function find(filter: ModuleFilter): any {
       const ex = c[id]?.exports;
       if (ex) live.push(ex);
     }
-    return findIn(live, filter);
+    const found = findIn(live, filter);
+    if (found !== undefined) return found;
   }
-  return undefined;
+  return findIn(cache, filter);
 }
 
 export function findByProps(...props: string[]): any {
@@ -331,6 +445,22 @@ export function findByProps(...props: string[]): any {
 
 /** Find a live Flux store instance by its registered `getName()`. */
 export function findStore(name: string): any {
+  // Discord's bridged-store rollout can leave multiple exported instances with
+  // the same display name in webpack. Only the instances registered on the
+  // active FluxStore base class receive gateway actions. Prefer that registry
+  // over the first matching export in module insertion order.
+  let liveStore: any;
+  find((candidate) => {
+    if (typeof candidate !== "function" || typeof candidate.getAll !== "function") return false;
+    let stores: any;
+    try { stores = candidate.getAll(); } catch { return false; }
+    if (!Array.isArray(stores)) return false;
+    liveStore = stores.find((store: any) => {
+      try { return store?.getName?.() === name; } catch { return false; }
+    });
+    return liveStore !== undefined;
+  });
+  if (liveStore !== undefined) return liveStore;
   return find(byStoreName(name));
 }
 
@@ -344,6 +474,15 @@ export function findStore(name: string): any {
 export function findByPropsLazy(...props: string[]): any {
   const live = findByProps(...props);
   if (live !== undefined) return live;
+  return findByLazyProps(props);
+}
+
+/**
+ * Require a module by matching its factory source, deliberately skipping the
+ * loaded-export cache. Discord's bridged stores can expose same-shaped but
+ * disconnected mirrors there; the current factory exports the concrete store.
+ */
+export function findByFactoryProps(...props: string[]): any {
   return findByLazyProps(props);
 }
 
@@ -362,7 +501,7 @@ function findByLazyProps(props: string[]): any {
     const fn = factories[id];
     if (typeof fn !== "function") continue;
     let src: string;
-    try { src = Function.prototype.toString.call(fn); } catch { continue; }
+    try { src = getWebpackFactorySource(fn); } catch { continue; }
     if (!matchers.every((m) => m(src))) continue;
     let mod: any;
     try { mod = wpRequire(id); } catch { continue; }
@@ -412,7 +551,7 @@ function findByFactorySourceImpl(fragments: string[], drill: boolean): any {
     const fn = factories[id];
     if (typeof fn !== "function") continue;
     let src: string;
-    try { src = Function.prototype.toString.call(fn); } catch { continue; }
+    try { src = getWebpackFactorySource(fn); } catch { continue; }
     if (!fragments.every((f) => src.includes(f))) continue;
     let exports: any;
     try { exports = wpRequire(id); } catch { continue; }
@@ -453,6 +592,13 @@ function findByFactorySourceImpl(fragments: string[], drill: boolean): any {
  * to find by their distinctive methods, so we find one and read `_dispatcher`.
  */
 export function findFluxDispatcher(): any {
+  // Prefer stores from the active FluxStore registry. A same-name webpack
+  // duplicate may carry a dispatcher that never receives live actions.
+  for (const name of ["UserStore", "ChannelStore", "GuildStore", "ReadStateStore"]) {
+    const store = findStore(name);
+    const dispatcher = store?._dispatcher;
+    if (dispatcher && typeof dispatcher.dispatch === "function") return dispatcher;
+  }
   // Candidate store finders — any one resolving gives us `_dispatcher`.
   const storeFilters: ModuleFilter[] = [
     byProps("getCurrentUser", "getUser"),       // UserStore

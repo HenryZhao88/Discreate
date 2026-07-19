@@ -1,5 +1,5 @@
 // src/renderer/core/index.ts
-import { initWebpack, findByProps, waitFor, byProps, forceLoadAllChunks, findFluxDispatcher } from "./webpack.js";
+import { initWebpack, findByProps, waitFor, byProps, forceLoadAllChunks, findFluxDispatcher, waitForMainWebpack } from "./webpack.js";
 import { SettingsStore, nativeBackend } from "./settings.js";
 import { ThemeManager } from "./themes.js";
 import { PluginManager, loadUserPlugins } from "./plugins.js";
@@ -17,9 +17,10 @@ import showHiddenThings from "../plugins/showHiddenThings/index.js";
 
 const log = makeLogger("core");
 
-function boot(): void {
+async function boot(): Promise<void> {
   log.log("booting");
   initWebpack();
+  await waitForMainWebpack();
 
   const settings = new SettingsStore(nativeBackend());
   const themes = new ThemeManager(settings);
