@@ -1,7 +1,8 @@
 // src/preload/native.ts
 import { contextBridge, ipcRenderer } from "electron";
 import {
-  readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync, watch, createWriteStream,
+  readFileSync, writeFileSync, appendFileSync, statSync, mkdirSync, existsSync, readdirSync, unlinkSync,
+  watch, createWriteStream,
 } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -99,6 +100,23 @@ export function exposeNative(): void {
     root: ROOT,
     readText: (p: string) => (existsSync(p) ? readFileSync(p, "utf8") : null),
     writeText: (p: string, data: string) => { ensureParent(p); writeFileSync(p, data); },
+
+    /**
+     * Append to a log file, truncating it when it passes `capBytes`.
+     *
+     * Callers used to emulate this by reading the whole file and writing it
+     * back with the new lines appended. These are synchronous fs calls on
+     * Discord's renderer thread, so that cost grows with the log: the deleted
+     * message log reached 33 MB, meaning a 66 MB read+write of the UI thread
+     * every flush.
+     */
+    appendText: (p: string, data: string, capBytes = 2_000_000): void => {
+      ensureParent(p);
+      try {
+        if (existsSync(p) && statSync(p).size > capBytes) unlinkSync(p);
+      } catch { /* fall through and just append */ }
+      appendFileSync(p, data);
+    },
     listDir: (p: string) => (existsSync(p) ? readdirSync(p) : []),
     readSettings: () => {
       const f = join(ROOT, "settings.json");

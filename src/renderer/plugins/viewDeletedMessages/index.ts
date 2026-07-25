@@ -55,7 +55,10 @@ function flushActivity(): void {
   try {
     const n = native();
     const p = `${n.root}/vdm-activity.log`;
-    n.writeText(p, (n.readText(p) ?? "") + lines.join("\n") + "\n");
+    // Append rather than read-modify-write: this runs on the renderer thread,
+    // and rewriting the whole file every flush made the log's own size the
+    // dominant cost once it had grown to tens of megabytes.
+    n.appendText(p, lines.join("\n") + "\n");
   } catch { /* ignore */ }
 }
 

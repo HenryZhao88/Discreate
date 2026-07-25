@@ -59,13 +59,25 @@ function markPermissionResult(permission: unknown, ret: boolean, channel: any): 
   return true;
 }
 
-function findChannelArg(args: any[]): any {
-  const ChannelStore = findStore("ChannelStore");
-  for (const arg of args) {
+/**
+ * ChannelStore, resolved once. `can` is among the hottest functions in
+ * Discord — it runs for every channel, message and menu on every render — so
+ * its patch callback must never perform a module lookup. Refreshed off the
+ * hot path by `scheduleUpdate` if it wasn't available when we patched.
+ */
+let channelStore: any;
+
+function refreshChannelStore(): void {
+  if (channelStore === undefined) channelStore = findStore("ChannelStore");
+}
+
+function findChannelArg(args: any[], from: number): any {
+  for (let i = from; i < args.length; i++) {
+    const arg = args[i];
     if (isGuildChannelLike(arg)) return arg;
     if (isGuildChannelLike(arg?.channel)) return arg.channel;
     if (arg?.channelId) {
-      const channel = ChannelStore?.getChannel?.(arg.channelId);
+      const channel = channelStore?.getChannel?.(arg.channelId);
       if (isGuildChannelLike(channel)) return channel;
     }
   }
@@ -78,17 +90,20 @@ function patchPermissionStore(): void {
     log.warn("PermissionStore.can unavailable");
     return;
   }
+  refreshChannelStore();
 
-  after(OWNER, PermissionStore, "can", (args, ret) => {
-    const channel = findChannelArg(args.slice(1));
-    return markPermissionResult(args[0], !!ret, channel);
-  });
+  // Returning undefined leaves Discord's own answer untouched. We only ever
+  // change it for VIEW_CHANNEL, and Discord asks about every other permission
+  // far more often, so bail before doing any work in the common case.
+  const handle = (args: any[], ret: any): boolean | undefined => {
+    if (!permissionIncludes(args[0], VIEW_CHANNEL)) return undefined;
+    return markPermissionResult(args[0], !!ret, findChannelArg(args, 1));
+  };
+
+  after(OWNER, PermissionStore, "can", handle);
 
   if (typeof PermissionStore.canWithPartialContext === "function") {
-    after(OWNER, PermissionStore, "canWithPartialContext", (args, ret) => {
-      const channel = findChannelArg(args.slice(1));
-      return markPermissionResult(args[0], !!ret, channel);
-    });
+    after(OWNER, PermissionStore, "canWithPartialContext", handle);
   }
 }
 
@@ -296,6 +311,7 @@ function scheduleUpdate(): void {
   requestAnimationFrame(() => {
     scheduled = false;
     try {
+      refreshChannelStore();
       updateChannelLinks();
       updateLockScreen();
     } catch (err) {

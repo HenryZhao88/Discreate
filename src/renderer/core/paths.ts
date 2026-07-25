@@ -6,6 +6,8 @@ export interface Native {
   pluginsDir: string;
   readText(p: string): string | null;
   writeText(p: string, data: string): void;
+  /** Append to a log file, truncating it once it exceeds `capBytes` (default 2 MB). */
+  appendText(p: string, data: string, capBytes?: number): void;
   listDir(p: string): string[];
   readSettings(): string | null;
   writeSettings(data: string): void;

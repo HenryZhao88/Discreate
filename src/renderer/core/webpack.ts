@@ -140,14 +140,22 @@ function webpackRequireScore(require: any): number {
 
 function selectBestWebpackRequire(): void {
   let best = wpRequire;
+  let bestScore = webpackRequireScore(best);
   for (const candidate of webpackRequires) {
-    if (webpackRequireScore(candidate) > webpackRequireScore(best)) best = candidate;
+    const score = webpackRequireScore(candidate);
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
   }
   if (!best || best === wpRequire) return;
   wpRequire = best;
   // Do not let exports collected from an auxiliary runtime shadow Discord's
   // main stores. The selected runtime's live cache is authoritative.
   cache.length = 0;
+  // Resolved stores came from the previous runtime and may be disconnected
+  // mirrors under the new one; make every finder resolve again.
+  storeCache.clear();
   ingestCacheFromRequire();
   makeRendererLogger("webpack")(
     `selected runtime p=${String(wpRequire.p)}, factories=${Object.keys(wpRequire.m ?? {}).length}, cache=${Object.keys(wpRequire.c ?? {}).length}`,
@@ -156,10 +164,17 @@ function selectBestWebpackRequire(): void {
 
 function registerWebpackRequire(require: any): void {
   if (typeof require !== "function") return;
+  // Every wrapped module factory calls this with its require, so on a cold
+  // boot it fires once per module — thousands of times. Scoring a runtime
+  // means Object.keys() over its entire factory map, and the re-score timers
+  // below multiply that by four. Doing either for a runtime we already know
+  // is pure waste, and enough of it to block the renderer for a minute.
+  if (webpackRequires.has(require)) return;
   webpackRequires.add(require);
   selectBestWebpackRequire();
   // `m`, `c`, and `p` are assigned at different points during bootstrap.
-  // Re-score after those assignments have had a chance to complete.
+  // Re-score after those assignments have had a chance to complete. Scheduled
+  // once per newly-seen runtime, which is all the re-scoring needs.
   for (const delay of [0, 50, 250, 1000]) {
     setTimeout(selectBestWebpackRequire, delay);
   }
@@ -419,15 +434,22 @@ export function initWebpack(): void {
 export function find(filter: ModuleFilter): any {
   // Prefer the selected main runtime's cache. The auxiliary runtime cache can
   // contain same-named disconnected store proxies.
-  if (wpRequire?.c) {
-    const c = wpRequire.c;
-    const live: any[] = [];
+  const c = wpRequire?.c;
+  if (c) {
+    // Walk the cache in place. Materialising an array of every module's
+    // exports first costs more than the search itself when the filter matches
+    // early, and this runs on hot paths.
     for (const id of Object.keys(c)) {
       const ex = c[id]?.exports;
-      if (ex) live.push(ex);
+      if (!ex) continue;
+      for (const candidate of exportCandidates(ex)) {
+        try {
+          if (filter(candidate)) return candidate;
+        } catch {
+          // skip
+        }
+      }
     }
-    const found = findIn(live, filter);
-    if (found !== undefined) return found;
   }
   return findIn(cache, filter);
 }
@@ -443,8 +465,29 @@ export function findByProps(...props: string[]): any {
   return find(byProps(...props));
 }
 
-/** Find a live Flux store instance by its registered `getName()`. */
+/**
+ * Find a live Flux store instance by its registered `getName()`.
+ *
+ * Resolved stores are memoised. A lookup walks the whole module cache and
+ * calls `getName()` on every registered store, and callers hit this from
+ * genuinely hot paths — `PermissionStore.can` is patched by showHiddenChannels
+ * and Discord calls it tens of thousands of times during the first render.
+ * Flux stores are singletons for the lifetime of a runtime, so caching a hit
+ * is safe; the entry is dropped in `selectBestWebpackRequire` if the runtime
+ * changes. Misses are never cached — the store may simply not have loaded yet.
+ */
 export function findStore(name: string): any {
+  const memo = storeCache.get(name);
+  if (memo !== undefined) return memo;
+
+  const resolved = resolveStore(name);
+  if (resolved !== undefined) storeCache.set(name, resolved);
+  return resolved;
+}
+
+const storeCache = new Map<string, any>();
+
+function resolveStore(name: string): any {
   // Discord's bridged-store rollout can leave multiple exported instances with
   // the same display name in webpack. Only the instances registered on the
   // active FluxStore base class receive gateway actions. Prefer that registry
