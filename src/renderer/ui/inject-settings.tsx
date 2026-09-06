@@ -20,6 +20,14 @@ import type { SettingsStore } from "../core/settings.js";
 
 const log = makeLogger("settings-ui");
 
+export const RISKY_PLUGINS = new Set<string>(["viewDeletedMessages", "showHiddenChannels"]);
+
+export function describePlugin(id: string, description: string): string {
+  return RISKY_PLUGINS.has(id)
+    ? `${description}  ⚠ May draw attention to your account — use at your own risk.`
+    : description;
+}
+
 interface Deps {
   plugins: PluginManager;
   themes: ThemeManager;
@@ -263,7 +271,7 @@ export function injectSettings(deps: Deps): void {
       body.appendChild(
         row(
           entry.plugin.name,
-          entry.plugin.description,
+          describePlugin(entry.id, entry.plugin.description),
           deps.plugins.isEnabled(entry.id),
           () => deps.plugins.setEnabled(entry.id, !deps.plugins.isEnabled(entry.id)),
           extra,
