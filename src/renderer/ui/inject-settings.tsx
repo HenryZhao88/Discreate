@@ -14,6 +14,7 @@
 
 import { makeLogger } from "../core/logger.js";
 import { native } from "../core/paths.js";
+import { checkForUpdate, type UpdateStatus } from "../core/updates.js";
 import type { PluginManager } from "../core/plugins.js";
 import type { ThemeManager } from "../core/themes.js";
 import type { SettingsStore } from "../core/settings.js";
@@ -104,8 +105,26 @@ function ensureStyles(): void {
     .dc-switch { width: 20px; height: 20px; cursor: pointer; }
     .dc-about { color: #b5bac1; line-height: 1.6; }
     .dc-about code { background: #2b2d31; padding: 2px 6px; border-radius: 3px; color: #fff; }
+    .dc-update-banner { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; margin-bottom:8px; background:var(--info-fill, #3a4a6b); border-radius:6px; color:#fff; }
   `;
   document.head.appendChild(s);
+}
+
+export function renderUpdateBanner(
+  status: UpdateStatus,
+  onUpdate: () => void,
+): HTMLElement | null {
+  if (!status.updateAvailable) return null;
+  const bar = document.createElement("div");
+  bar.className = "dc-update-banner";
+  const msg = document.createElement("span");
+  msg.textContent = "A new version of Discreate is available.";
+  const btn = document.createElement("button");
+  btn.textContent = "Update";
+  btn.className = "dc-btn dc-btn-primary";
+  btn.addEventListener("click", onUpdate);
+  bar.append(msg, btn);
+  return bar;
 }
 
 type Tab = "plugins" | "themes" | "messagelog" | "about";
@@ -156,6 +175,17 @@ export function injectSettings(deps: Deps): void {
   const body = document.createElement("div");
   body.className = "dc-body";
   card.appendChild(body);
+
+  // Update check — fire-and-forget, never blocks the panel.
+  void checkForUpdate({
+    readInstalled: () => native().readInstalled(),
+    fetchText: (url) => native().fetchText(url),
+  }).then((status) => {
+    const banner = renderUpdateBanner(status, () => {
+      try { native().runInstaller(); } catch { /* installer missing; ignore */ }
+    });
+    if (banner) card.insertBefore(banner, tabs);
+  }).catch(() => { /* never throw into the UI */ });
 
   root.appendChild(overlay);
 
