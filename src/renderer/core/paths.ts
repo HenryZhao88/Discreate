@@ -19,6 +19,8 @@ export interface Native {
   openFolder(p: string): void;
   downloadToFolder(url: string, folder: string, filename?: string): Promise<string>;
   fetchText(url: string): Promise<string>;
+  readInstalled(): string | null;
+  runInstaller(): void;
 }
 
 export function native(): Native {
