@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 
 const SALT = "discreate-telemetry-v1";
@@ -40,7 +40,7 @@ export function getDeviceId(deps: DeviceIdDeps = {}): string {
   const idFile = deps.idFilePath ?? join(homedir(), ".discreate", "install-id");
   const read = deps.readFile ?? ((p) => (existsSync(p) ? readFileSync(p, "utf8") : null));
   const write = deps.writeFile ?? ((p, d) => {
-    mkdirSync(join(homedir(), ".discreate"), { recursive: true });
+    mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, d);
   });
 

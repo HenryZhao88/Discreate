@@ -46,4 +46,16 @@ describe("worker GET /count", () => {
     const json = await res.json();
     expect(json.total).toBe(2);
   });
+
+  it("computes active30d from only recently-seen devices", async () => {
+    const kv = fakeKV();
+    const todayStr = new Date().toISOString().slice(0, 10);
+    kv.store.set("recent", todayStr);
+    kv.store.set("stale", "2000-01-01");
+    const res = await handle(new Request("https://x/count"), { COUNTS: kv } as any);
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.total).toBe(2);
+    expect(json.active30d).toBe(1);
+  });
 });
