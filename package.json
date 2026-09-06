@@ -1,7 +1,10 @@
 {
   "name": "discreate",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.2.0",
+  "description": "A macOS client modification for the Discord desktop app: plugin + theme runtime with BetterDiscord compatibility.",
+  "license": "GPL-3.0-or-later",
+  "homepage": "https://github.com/HenryZhao88/Discreate",
+  "repository": { "type": "git", "url": "https://github.com/HenryZhao88/Discreate.git" },
   "type": "module",
   "bin": {
     "discreate": "./dist/injector/cli.js"
