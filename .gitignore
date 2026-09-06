@@ -8,3 +8,6 @@ Vencord-main/
 
 # Internal working notes — not part of the shipped project
 docs/
+
+# Release artifact built locally, attached to GitHub Releases
+Discreate-Installer.zip
