@@ -5,4 +5,4 @@ compatibility_date = "2026-09-06"
 
 [[kv_namespaces]]
 binding = "COUNTS"
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+id = "b9da965618f647c9b5c8249938429357"

@@ -2,8 +2,9 @@ import { request as httpsRequest } from "node:https";
 import { release, arch as osArch } from "node:os";
 import { getDeviceId } from "./device-id.js";
 
-// Replace with your deployed Worker URL after `wrangler deploy`.
-export const TELEMETRY_ENDPOINT = "https://discreate-telemetry.workers.dev";
+// Deployed Cloudflare Worker (source in server/). Forkers/self-hosters:
+// deploy your own per server/README.md and replace this URL.
+export const TELEMETRY_ENDPOINT = "https://discreate-telemetry.discreate.workers.dev";
 
 export interface TelemetryPayload {
   id: string; v: string; os: string; osv: string; arch: string;
