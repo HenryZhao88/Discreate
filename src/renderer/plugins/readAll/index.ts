@@ -23,6 +23,8 @@ export interface ReadAllStores {
   ReadStateStore: {
     hasUnread(channelId: string): boolean;
     lastMessageId(channelId: string): string;
+    /** Flux stores keep the live dispatcher they are registered with here. */
+    _dispatcher?: { dispatch(action: unknown): void };
   };
 }
 
@@ -50,6 +52,24 @@ export function collectUnreadChannels(stores: ReadAllStores): AckChannel[] {
   return out;
 }
 
+/**
+ * Dispatch the same action Discord uses for its native "mark all read" flow.
+ * Keeping this separate makes the runtime boundary testable and lets callers
+ * use the dispatcher belonging to the authoritative Flux store.
+ */
+export function dispatchReadAll(
+  stores: ReadAllStores,
+  dispatcher?: { dispatch(action: unknown): void },
+): number {
+  const channels = collectUnreadChannels(stores);
+  const liveDispatcher = stores.ReadStateStore._dispatcher ?? dispatcher;
+  if (!liveDispatcher || typeof liveDispatcher.dispatch !== "function") {
+    throw new Error("Read All: the live Flux dispatcher is unavailable");
+  }
+  liveDispatcher.dispatch({ type: "BULK_ACK", context: "APP", channels });
+  return channels.length;
+}
+
 const log = makeLogger("ReadAll");
 const BUTTON_ID = "discreate-readall-btn";
 const STYLE_ID = "discreate-readall-style";
@@ -69,9 +89,13 @@ function resolveStores(): ReadAllStores | null {
 function readAll(): void {
   const stores = resolveStores();
   if (!stores) return;
-  const channels = collectUnreadChannels(stores);
-  Discreate.FluxDispatcher?.dispatch({ type: "BULK_ACK", context: "APP", channels });
-  log.log(`Read All — acked ${channels.length} channel(s)`);
+  try {
+    // Use the current store's dispatcher; bootstrap may refer to an older runtime.
+    const count = dispatchReadAll(stores, Discreate.FluxDispatcher);
+    log.log(`Read All — acked ${count} channel(s)`);
+  } catch (err) {
+    log.error("Read All: dispatch failed", err);
+  }
 }
 
 function ensureStyles(): void {

@@ -12,6 +12,20 @@ const deletedIds = new Set<string>();
 
 let observer: MutationObserver | null = null;
 let onLocalDelete: ((channelId: string, messageId: string) => void) | null = null;
+let closePopup: (() => void) | null = null;
+
+function dismissOnOutsideClick(popup: HTMLElement): void {
+  const close = () => {
+    popup.remove();
+    document.removeEventListener("click", onClick, true);
+    if (closePopup === close) closePopup = null;
+  };
+  const onClick = (event: MouseEvent) => {
+    if (!popup.contains(event.target as Node)) close();
+  };
+  closePopup = close;
+  document.addEventListener("click", onClick, true);
+}
 
 export function setLocalDeleteHandler(fn: (channelId: string, messageId: string) => void): void {
   onLocalDelete = fn;
@@ -85,7 +99,8 @@ function augmentRow(row: HTMLElement): void {
   const existingMarker = row.querySelector(`.${MARKER_CLASS}`);
   if (history?.length) {
     if (existingMarker) {
-      existingMarker.textContent = `(edited ×${history.length})`;
+      const text = `(edited ×${history.length})`;
+      if (existingMarker.textContent !== text) existingMarker.textContent = text;
     } else {
       const marker = document.createElement("span");
       marker.className = MARKER_CLASS;
@@ -105,20 +120,19 @@ function augmentAll(): void {
   }
 }
 
-let augmentScheduled = false;
+let augmentScheduled: number | null = null;
 /** Coalesce mutation bursts into one augment pass per animation frame. */
 function scheduleAugment(): void {
-  if (augmentScheduled) return;
-  augmentScheduled = true;
-  requestAnimationFrame(() => {
-    augmentScheduled = false;
+  if (augmentScheduled !== null) return;
+  augmentScheduled = requestAnimationFrame(() => {
+    augmentScheduled = null;
     augmentAll();
   });
 }
 
 function showEditPopover(e: MouseEvent, messageId: string): void {
   e.stopPropagation();
-  document.querySelector(".discreate-ml-popover")?.remove();
+  closePopup?.();
   const history = editHistory.get(messageId) ?? [];
   const pop = document.createElement("div");
   pop.className = "discreate-ml-popover";
@@ -129,10 +143,7 @@ function showEditPopover(e: MouseEvent, messageId: string): void {
   pop.style.left = `${Math.min(e.clientX, window.innerWidth - 440)}px`;
   pop.style.top = `${Math.min(e.clientY + 8, window.innerHeight - 220)}px`;
   document.body.appendChild(pop);
-  const close = (ev: MouseEvent) => {
-    if (!pop.contains(ev.target as Node)) { pop.remove(); document.removeEventListener("click", close, true); }
-  };
-  setTimeout(() => document.addEventListener("click", close, true), 0);
+  dismissOnOutsideClick(pop);
 }
 
 function escapeHtml(s: string): string {
@@ -144,23 +155,20 @@ function escapeHtml(s: string): string {
 function showContextMenu(e: MouseEvent, channelId: string, messageId: string): void {
   e.preventDefault();
   e.stopPropagation();
-  document.querySelector(".discreate-ml-menu")?.remove();
+  closePopup?.();
   const menu = document.createElement("div");
   menu.className = "discreate-ml-menu";
   const btn = document.createElement("button");
   btn.textContent = "Delete locally";
   btn.addEventListener("click", () => {
-    menu.remove();
+    closePopup?.();
     onLocalDelete?.(channelId, messageId);
   });
   menu.appendChild(btn);
   menu.style.left = `${Math.min(e.clientX, window.innerWidth - 160)}px`;
   menu.style.top = `${e.clientY}px`;
   document.body.appendChild(menu);
-  const close = (ev: MouseEvent) => {
-    if (!menu.contains(ev.target as Node)) { menu.remove(); document.removeEventListener("click", close, true); }
-  };
-  setTimeout(() => document.addEventListener("click", close, true), 0);
+  dismissOnOutsideClick(menu);
 }
 
 /** A single delegated contextmenu listener for all deleted rows. */
@@ -182,11 +190,16 @@ export function startDomLayer(): void {
 }
 
 export function stopDomLayer(): void {
+  closePopup?.();
+  if (augmentScheduled !== null) cancelAnimationFrame(augmentScheduled);
+  augmentScheduled = null;
   observer?.disconnect();
   observer = null;
   document.removeEventListener("contextmenu", onContextMenu, true);
   document.getElementById(STYLE_ID)?.remove();
   for (const row of document.querySelectorAll(`.${DELETED_CLASS}`)) row.classList.remove(DELETED_CLASS);
   for (const m of document.querySelectorAll(`.${MARKER_CLASS}`)) m.remove();
+  for (const popup of document.querySelectorAll(".discreate-ml-popover, .discreate-ml-menu")) popup.remove();
+  onLocalDelete = null;
   deletedIds.clear();
 }

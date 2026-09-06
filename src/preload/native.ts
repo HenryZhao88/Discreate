@@ -2,13 +2,12 @@
 import { contextBridge, ipcRenderer } from "electron";
 import {
   readFileSync, writeFileSync, appendFileSync, statSync, mkdirSync, existsSync, readdirSync, unlinkSync,
-  watch, createWriteStream,
+  watch,
 } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
-import * as https from "node:https";
-import * as http from "node:http";
+import { downloadFile, fetchText } from "./network.js";
 
 const ROOT = join(homedir(), ".discreate");
 const dirs = { themes: join(ROOT, "themes"), plugins: join(ROOT, "plugins"), bdData: join(ROOT, "bd-data") };
@@ -45,53 +44,6 @@ function deriveFilename(url: string): string {
   } catch {
     return "download";
   }
-}
-
-function downloadFile(url: string, dest: string, maxRedirects = 5): Promise<void> {
-  return new Promise((resolveP, rejectP) => {
-    const mod = url.startsWith("http://") ? http : https;
-    mod.get(url, (res) => {
-      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && maxRedirects > 0) {
-        res.resume();
-        const next = new URL(res.headers.location, url).toString();
-        downloadFile(next, dest, maxRedirects - 1).then(resolveP, rejectP);
-        return;
-      }
-      if (res.statusCode !== 200) {
-        res.resume();
-        rejectP(new Error(`HTTP ${res.statusCode} fetching ${url}`));
-        return;
-      }
-      const out = createWriteStream(dest);
-      res.pipe(out);
-      out.on("finish", () => out.close(() => resolveP()));
-      out.on("error", rejectP);
-    }).on("error", rejectP);
-  });
-}
-
-/** Fetch a URL as text via Node, bypassing the renderer's CSP. */
-function fetchText(url: string, maxRedirects = 5): Promise<string> {
-  return new Promise((resolveP, rejectP) => {
-    const mod = url.startsWith("http://") ? http : https;
-    mod.get(url, { headers: { "User-Agent": "Discreate/0.1" } }, (res) => {
-      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && maxRedirects > 0) {
-        res.resume();
-        const next = new URL(res.headers.location, url).toString();
-        fetchText(next, maxRedirects - 1).then(resolveP, rejectP);
-        return;
-      }
-      if (res.statusCode !== 200) {
-        res.resume();
-        rejectP(new Error(`HTTP ${res.statusCode} fetching ${url}`));
-        return;
-      }
-      const chunks: Buffer[] = [];
-      res.on("data", (c: Buffer) => chunks.push(c));
-      res.on("end", () => resolveP(Buffer.concat(chunks).toString("utf8")));
-      res.on("error", rejectP);
-    }).on("error", rejectP);
-  });
 }
 
 export function exposeNative(): void {

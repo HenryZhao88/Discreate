@@ -36,6 +36,7 @@ export function patchCore(coreDir: string, runtimeDir: string): void {
 }
 
 export function unpatchCore(coreDir: string): void {
+  if (!isCorePatched(coreDir)) return;
   const idx = join(coreDir, "index.js");
   const backup = join(coreDir, "index.js.discreate-backup");
   if (existsSync(backup)) {

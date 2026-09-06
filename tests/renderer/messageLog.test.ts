@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { capEntries, makeEditEntry, parseLogFile, serializeLogFile } from "../../src/renderer/plugins/viewDeletedMessages/log";
+import { describe, it, expect, vi } from "vitest";
+import { capEntries, makeEditEntry, parseLogFile, serializeLogFile, recordDeleted, recordEdit, readLog } from "../../src/renderer/plugins/viewDeletedMessages/log";
 
 describe("capEntries", () => {
   it("keeps only the last `cap` entries", () => {
@@ -30,6 +30,25 @@ describe("makeEditEntry", () => {
 });
 
 describe("parseLogFile", () => {
+  it("rejects invalid log and record shapes without crashing", () => {
+    for (const raw of ["null", "12", '{"deleted":[null,{}],"edits":[null,{}]}']) {
+      expect(parseLogFile(raw)).toEqual({ deleted: [], edits: [] });
+    }
+  });
+  it("deduplicates deletions and caps deleted plus edited records together", () => {
+    let raw: string | null = null;
+    vi.stubGlobal("window", { DiscreateNative: { readDeletedLog: () => raw, writeDeletedLog: (value: string) => { raw = value; } } });
+    try {
+      const rec = { channelId: "c", messageId: "1", author: "a", content: "text", timestamp: 1 };
+      recordDeleted(rec, 2);
+      recordDeleted(rec, 2);
+      expect(readLog().deleted).toHaveLength(1);
+      recordEdit({ ...rec, messageId: "2", history: [], timestamp: 2 }, 2);
+      recordDeleted({ ...rec, messageId: "3", timestamp: 3 }, 2);
+      expect(readLog().deleted.map((r) => r.messageId)).toEqual(["3"]);
+      expect(readLog().edits).toHaveLength(1);
+    } finally { vi.unstubAllGlobals(); }
+  });
   it("returns empty log for null/garbage input", () => {
     expect(parseLogFile(null)).toEqual({ deleted: [], edits: [] });
     expect(parseLogFile("{not json")).toEqual({ deleted: [], edits: [] });

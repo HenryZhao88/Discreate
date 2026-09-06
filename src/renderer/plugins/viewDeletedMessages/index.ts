@@ -5,7 +5,7 @@ import { findByProps, findByPropsLazy, findStore } from "../../core/webpack.js";
 import { instead } from "../../core/patcher.js";
 import { makeLogger } from "../../core/logger.js";
 import { native } from "../../core/paths.js";
-import { recordDeleted, recordEdit, removeDeleted, removeEdit, editHistory, makeEditEntry as makeEditEntryFromStore } from "./log.js";
+import { readLog, recordDeleted, recordEdit, removeDeleted, removeEdit, editHistory, makeEditEntry as makeEditEntryFromStore } from "./log.js";
 import { startDomLayer, stopDomLayer, markDeleted, unmarkDeleted, setLocalDeleteHandler } from "./domLayer.js";
 import type { EditEntry } from "./log.js";
 
@@ -13,16 +13,13 @@ const log = makeLogger("ViewDeletedMessages");
 const OWNER = "viewDeletedMessages";
 
 /** Resolve Discord's MessageStore lazily — it loads on first channel open. */
-let messageStoreCache: any = null;
 function messageStore(): any {
-  if (messageStoreCache?.getName?.() === "MessageStore") return messageStoreCache;
   // Match the real Flux store by name first — a bare `getMessage`/`getMessages`
   // prop match picks up unrelated helpers that hold no message data.
-  messageStoreCache =
+  return (
     findStore("MessageStore") ??
     findByProps("getMessage", "getMessages") ??
-    findByPropsLazy("getMessage", "getMessages");
-  return messageStoreCache;
+    findByPropsLazy("getMessage", "getMessages"));
 }
 
 /** Retrieve a message by id, trying every shape modern MessageStore exposes. */
@@ -78,8 +75,10 @@ const plugin: DiscreatePlugin = {
 
     const Dispatcher = Discreate.FluxDispatcher;
     if (!Dispatcher || typeof Dispatcher.dispatch !== "function") {
-      log.error("FluxDispatcher unavailable — plugin cannot start");
-      return;
+      throw new Error("FluxDispatcher unavailable — plugin cannot start");
+    }
+    for (const rec of readLog().edits) {
+      if (!editHistory.has(rec.messageId)) editHistory.set(rec.messageId, rec.history);
     }
 
     /**
@@ -108,7 +107,7 @@ const plugin: DiscreatePlugin = {
 
         markDeleted(channelId, messageId);
 
-        if (logging) {
+        if (logging) try {
           recordDeleted({
             channelId,
             messageId,
@@ -116,7 +115,7 @@ const plugin: DiscreatePlugin = {
             content: msg.content ?? "",
             timestamp: Date.now(),
           }, logCap);
-        }
+        } catch (err) { log.error("Could not persist kept message:", err); }
         log.log(`kept deleted message from ${msg.author?.username ?? "?"}: ${(msg.content ?? "").slice(0, 80)}`);
         return true;
       } catch (err) {
@@ -189,14 +188,14 @@ const plugin: DiscreatePlugin = {
 
       if (action?.type === "MESSAGE_DELETE_BULK") {
         activity(`MESSAGE_DELETE_BULK seen: channel=${action.channelId} count=${(action.ids ?? []).length}`);
-        let keptAny = false;
+        const remaining: string[] = [];
         for (const id of action.ids ?? []) {
-          if (keep(action.channelId, id)) keptAny = true;
+          if (!keep(action.channelId, id)) remaining.push(id);
         }
-        if (keptAny) {
+        if (remaining.length < (action.ids ?? []).length) {
           activity("  -> kept bulk; dispatching neutralized action");
           traceUntil = Date.now() + 10000;
-          return dispatchInert(originalDispatch, action);
+          return remaining.length ? originalDispatch({ ...action, ids: remaining }) : dispatchInert(originalDispatch, action);
         }
         return originalDispatch(action);
       }

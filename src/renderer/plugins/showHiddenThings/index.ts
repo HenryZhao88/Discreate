@@ -23,7 +23,8 @@ const DEFAULT_OPTIONS: Options = {
 
 let options: Options = DEFAULT_OPTIONS;
 let observer: MutationObserver | null = null;
-let scheduled = false;
+let scheduled: number | null = null;
+const positionedAnchors = new Map<HTMLElement, string>();
 
 export function permissionIncludes(permission: unknown, bit: bigint): boolean {
   try {
@@ -84,7 +85,10 @@ function guildAnchor(guildId: string): HTMLElement | null {
 function ensureBadge(anchor: HTMLElement): void {
   if (anchor.querySelector(`:scope > .${BADGE_CLASS}`)) return;
   const computed = getComputedStyle(anchor);
-  if (computed.position === "static") anchor.style.position = "relative";
+  if (computed.position === "static") {
+    positionedAnchors.set(anchor, anchor.style.position);
+    anchor.style.position = "relative";
+  }
   const badge = document.createElement("span");
   badge.className = BADGE_CLASS;
   badge.title = "Invites paused";
@@ -97,21 +101,27 @@ function ensureBadge(anchor: HTMLElement): void {
 }
 
 function updateInviteBadges(): void {
-  for (const badge of document.querySelectorAll(`.${BADGE_CLASS}`)) badge.remove();
-  if (!options.showInvitesPaused) return;
+  const wanted = new Set<HTMLElement>();
   const GuildStore = findStore("GuildStore");
-  for (const [guildId, guild] of Object.entries<any>(GuildStore?.getGuilds?.() ?? {})) {
+  for (const [guildId, guild] of Object.entries<any>(options.showInvitesPaused ? GuildStore?.getGuilds?.() ?? {} : {})) {
     if (!guildHasInvitesPaused(guild)) continue;
     const anchor = guildAnchor(guildId);
-    if (anchor) ensureBadge(anchor);
+    if (anchor) { wanted.add(anchor); ensureBadge(anchor); }
+  }
+  for (const badge of document.querySelectorAll(`.${BADGE_CLASS}`)) {
+    if (!wanted.has(badge.parentElement!)) badge.remove();
+  }
+  for (const [anchor, position] of positionedAnchors) {
+    if (wanted.has(anchor)) continue;
+    if (anchor.style.position === "relative") anchor.style.position = position;
+    positionedAnchors.delete(anchor);
   }
 }
 
 function scheduleBadges(): void {
-  if (scheduled) return;
-  scheduled = true;
-  requestAnimationFrame(() => {
-    scheduled = false;
+  if (scheduled !== null) return;
+  scheduled = requestAnimationFrame(() => {
+    scheduled = null;
     try { updateInviteBadges(); }
     catch (err) { log.warn("badge update failed:", err); }
   });
@@ -127,7 +137,8 @@ function patchPermissionStore(): void {
   after(OWNER, PermissionStore, "canManageUser", (args, ret) => {
     if (ret) return ret;
     if (!options.showTimeouts && !options.showModView) return ret;
-    return permissionIncludes(args[0], MODERATE_MEMBERS) ? true : ret;
+    try { return BigInt(args[0]) === MODERATE_MEMBERS ? true : ret; }
+    catch { return ret; }
   });
 }
 
@@ -149,9 +160,15 @@ const plugin: DiscreatePlugin = {
     log.log("started");
   },
   stop() {
+    if (scheduled !== null) cancelAnimationFrame(scheduled);
+    scheduled = null;
     observer?.disconnect();
     observer = null;
     for (const badge of document.querySelectorAll(`.${BADGE_CLASS}`)) badge.remove();
+    for (const [anchor, position] of positionedAnchors) {
+      if (anchor.style.position === "relative") anchor.style.position = position;
+    }
+    positionedAnchors.clear();
     document.getElementById(STYLE_ID)?.remove();
     log.log("stopped");
   },

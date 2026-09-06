@@ -128,7 +128,7 @@ function augmentMemberRow(row: HTMLElement, s: Stores): void {
 }
 
 let observer: MutationObserver | null = null;
-let scheduled = false;
+let scheduled: number | null = null;
 
 function augmentAll(): void {
   const s = stores();
@@ -143,10 +143,9 @@ function augmentAll(): void {
 }
 
 function scheduleAugment(): void {
-  if (scheduled) return;
-  scheduled = true;
-  requestAnimationFrame(() => {
-    scheduled = false;
+  if (scheduled !== null) return;
+  scheduled = requestAnimationFrame(() => {
+    scheduled = null;
     try { augmentAll(); }
     catch (err) { log.warn("augment failed:", err); }
   });
@@ -164,6 +163,8 @@ const plugin: DiscreatePlugin = {
     log.log("started");
   },
   stop() {
+    if (scheduled !== null) cancelAnimationFrame(scheduled);
+    scheduled = null;
     observer?.disconnect();
     observer = null;
     for (const crown of document.querySelectorAll(`.${CROWN_CLASS}`)) crown.remove();

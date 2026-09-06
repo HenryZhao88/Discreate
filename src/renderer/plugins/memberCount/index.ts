@@ -158,7 +158,7 @@ function ensureHost(): HTMLElement | null {
 
 function setText(host: HTMLElement, kind: string, value: string): void {
   const el = host.querySelector<HTMLElement>(`[data-kind="${kind}"]`);
-  if (el) el.textContent = value;
+  if (el && el.textContent !== value) el.textContent = value;
 }
 
 function updateWidget(): void {
@@ -200,13 +200,12 @@ function updateWidget(): void {
 
 let observer: MutationObserver | null = null;
 let interval: ReturnType<typeof setInterval> | null = null;
-let scheduled = false;
+let scheduled: number | null = null;
 
 function scheduleUpdate(): void {
-  if (scheduled) return;
-  scheduled = true;
-  requestAnimationFrame(() => {
-    scheduled = false;
+  if (scheduled !== null) return;
+  scheduled = requestAnimationFrame(() => {
+    scheduled = null;
     try { updateWidget(); }
     catch (err) { log.warn("update failed:", err); }
   });
@@ -245,6 +244,8 @@ const plugin: DiscreatePlugin = {
     log.log("started");
   },
   stop() {
+    if (scheduled !== null) cancelAnimationFrame(scheduled);
+    scheduled = null;
     observer?.disconnect();
     observer = null;
     if (interval) clearInterval(interval);

@@ -62,11 +62,22 @@ export function importCandidates(url: string): string[] {
  * Also strips `@import` lines for Google Fonts and similar font CDNs: those
  * require a different fetch policy and aren't critical for the visual change.
  */
-async function inlineImports(css: string, depth = 0): Promise<string> {
+export async function inlineImports(css: string, depth = 0, baseUrl?: string): Promise<string> {
   if (depth > 3) return css; // defense against import cycles
-  const importRe = /@import\s+url\(\s*['"]?([^'")]+)['"]?\s*\)\s*;?/g;
-  const tasks: Array<{ raw: string; url: string }> = [];
-  for (const m of css.matchAll(importRe)) tasks.push({ raw: m[0], url: m[1] });
+  if (baseUrl) {
+    css = css.replace(/url\(\s*(['"]?)([^'"\s)]+)\1\s*\)/g, (raw, _quote, url: string) => {
+      if (/^(?:[a-z][a-z\d+.-]*:|#)/i.test(url)) return raw;
+      return `url("${new URL(url, baseUrl).href}")`;
+    });
+  }
+  const importRe = /@import\s+(?:url\(\s*['"]?([^'")]+)['"]?\s*\)|['"]([^'"]+)['"])\s*([^;]*);/g;
+  const tasks: Array<{ raw: string; url: string; media: string }> = [];
+  for (const m of css.matchAll(importRe)) {
+    // Preserve qualifiers we cannot translate without changing the cascade.
+    if (/\b(?:layer|supports)\b/.test(m[3])) continue;
+    const url = (m[1] ?? m[2]).trim();
+    tasks.push({ raw: m[0], url: baseUrl ? new URL(url, baseUrl).href : url, media: m[3].trim() });
+  }
   if (tasks.length === 0) return css;
 
   for (const t of tasks) {
@@ -88,7 +99,7 @@ async function inlineImports(css: string, depth = 0): Promise<string> {
         }
         if (body == null) throw lastError ?? new Error("no import URL succeeded");
         // Recurse: imported sheet may itself contain imports.
-        replacement = await inlineImports(body, depth + 1);
+        replacement = await inlineImports(body, depth + 1, t.url);
         importCache.set(t.url, replacement);
         cacheImport(t.url, replacement);
       } catch (err) {
@@ -105,12 +116,14 @@ async function inlineImports(css: string, depth = 0): Promise<string> {
         }
       }
     }
-    css = css.replace(t.raw, replacement);
+    if (t.media && replacement !== t.raw) replacement = `@media ${t.media} {\n${replacement}\n}`;
+    css = css.replace(t.raw, () => replacement);
   }
   return css;
 }
 
 export class ThemeManager {
+  private revisions = new Map<string, number>();
   constructor(private settings: SettingsStore) {}
 
   /** All theme filenames available in ~/.discreate/themes. */
@@ -125,9 +138,11 @@ export class ThemeManager {
   }
 
   private async apply(file: string): Promise<void> {
+    const revision = (this.revisions.get(file) ?? 0) + 1;
+    this.revisions.set(file, revision);
     const path = `${native().themesDir}/${file}`;
     const raw = native().readText(path);
-    if (raw == null) { log.warn(`theme not found: ${file}`); return; }
+    if (raw == null) { this.unapply(file); log.warn(`theme not found: ${file}`); return; }
     let el = document.getElementById(this.styleId(file)) as HTMLStyleElement | null;
     if (!el) {
       el = document.createElement("style");
@@ -136,11 +151,13 @@ export class ThemeManager {
     }
     // Inline @import urls so themes that depend on a remote stylesheet work.
     const resolved = await inlineImports(raw);
+    if (this.revisions.get(file) !== revision) return;
     el.textContent = resolved;
     log.log(`applied ${file} (${resolved.length} bytes)`);
   }
 
   private unapply(file: string): void {
+    this.revisions.set(file, (this.revisions.get(file) ?? 0) + 1);
     document.getElementById(this.styleId(file))?.remove();
   }
 

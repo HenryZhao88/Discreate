@@ -123,6 +123,7 @@ export function findIn(modules: any[], filter: ModuleFilter): any {
 let wpRequire: any = null;
 const webpackRequires = new Set<any>();
 const cache: any[] = [];
+const collected = new Set<any>();
 const waiters: { filter: ModuleFilter; cb: (mod: any) => void }[] = [];
 const ORIGINAL_FACTORY = Symbol.for("discreate.originalWebpackFactory");
 
@@ -153,6 +154,7 @@ function selectBestWebpackRequire(): void {
   // Do not let exports collected from an auxiliary runtime shadow Discord's
   // main stores. The selected runtime's live cache is authoritative.
   cache.length = 0;
+  collected.clear();
   // Resolved stores came from the previous runtime and may be disconnected
   // mirrors under the new one; make every finder resolve again.
   storeCache.clear();
@@ -254,7 +256,7 @@ function notifyWaiters(exports: any): void {
 
 function collect(exports: any): void {
   if (!exports) return;
-  cache.push(exports);
+  if (!collected.has(exports)) { collected.add(exports); cache.push(exports); }
   notifyWaiters(exports);
 }
 
@@ -347,7 +349,7 @@ export async function forceLoadAllChunks(): Promise<void> {
   if (loadLazyChunks) {
     await Promise.all(
       ids.map((id) =>
-        Promise.resolve(wpRequire.e(id)).catch(() => undefined),
+        Promise.resolve().then(() => wpRequire.e(id)).catch(() => undefined),
       ),
     );
   }
@@ -377,7 +379,7 @@ async function evaluateAllFactories(): Promise<void> {
     for (const id of slice) {
       try { wpRequire(id); ok++; } catch { fail++; }
     }
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
   makeRendererLogger("webpack")(`evaluated ${ok}/${ids.length} factories (${fail} failed)`);
 }
@@ -396,11 +398,14 @@ export function initWebpack(): void {
     if (modules) {
       for (const id of Object.keys(modules)) {
         const original = modules[id]?.[ORIGINAL_FACTORY] ?? modules[id];
-        const wrapped = (mod: any, mExports: any, require: any) => {
+        const wrapped = function (this: any, mod: any, mExports: any, require: any) {
           registerWebpackRequire(require);
-          original(mod, mExports, require);
-          if (mod?.exports) collect(mod.exports);
-          if (mExports && mExports !== mod?.exports) collect(mExports);
+          const result = original.call(this, mod, mExports, require);
+          if (require === wpRequire) {
+            if (mod?.exports) collect(mod.exports);
+            if (mExports && mExports !== mod?.exports) collect(mExports);
+          }
+          return result;
         };
         Object.defineProperty(wrapped, ORIGINAL_FACTORY, { value: original });
         modules[id] = wrapped;
@@ -463,6 +468,19 @@ export function findByProps(...props: string[]): any {
   );
   if (stringy !== undefined) return stringy;
   return find(byProps(...props));
+}
+
+/** Enumerate the same selected runtime and export candidates used by find(). */
+export function findAll(filter: ModuleFilter): any[] {
+  const results: any[] = [];
+  const seen = new Set<any>();
+  find((candidate) => {
+    if (seen.has(candidate)) return false;
+    seen.add(candidate);
+    if (filter(candidate)) results.push(candidate);
+    return false;
+  });
+  return results;
 }
 
 /**
@@ -712,8 +730,13 @@ export function debugDumpDispatchers(): string[] {
   return out;
 }
 
-export function waitFor(filter: ModuleFilter, cb: (mod: any) => void): void {
+export function waitFor(filter: ModuleFilter, cb: (mod: any) => void): () => void {
   const existing = find(filter);
-  if (existing) return cb(existing);
-  waiters.push({ filter, cb });
+  if (existing) { cb(existing); return () => {}; }
+  const waiter = { filter, cb };
+  waiters.push(waiter);
+  return () => {
+    const i = waiters.indexOf(waiter);
+    if (i >= 0) waiters.splice(i, 1);
+  };
 }

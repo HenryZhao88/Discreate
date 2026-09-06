@@ -32,7 +32,11 @@ export function isGuildChannelLike(channel: any): boolean {
 }
 
 export function shouldRevealHiddenChannel(permission: unknown, originalAllowed: boolean, channel: any): boolean {
-  return !originalAllowed && permissionIncludes(permission, VIEW_CHANNEL) && isGuildChannelLike(channel);
+  return !originalAllowed && isViewPermission(permission) && isGuildChannelLike(channel);
+}
+
+function isViewPermission(permission: unknown): boolean {
+  try { return BigInt(permission as any) === VIEW_CHANNEL; } catch { return false; }
 }
 
 function channelTypeName(channel: any): string {
@@ -50,7 +54,7 @@ function channelTypeName(channel: any): string {
 }
 
 function markPermissionResult(permission: unknown, ret: boolean, channel: any): boolean {
-  if (!isGuildChannelLike(channel) || !permissionIncludes(permission, VIEW_CHANNEL)) return ret;
+  if (!isGuildChannelLike(channel) || !isViewPermission(permission)) return ret;
   if (ret) {
     hiddenChannelIds.delete(channel.id);
     return ret;
@@ -68,7 +72,7 @@ function markPermissionResult(permission: unknown, ret: boolean, channel: any): 
 let channelStore: any;
 
 function refreshChannelStore(): void {
-  if (channelStore === undefined) channelStore = findStore("ChannelStore");
+  channelStore = findStore("ChannelStore");
 }
 
 function findChannelArg(args: any[], from: number): any {
@@ -96,7 +100,7 @@ function patchPermissionStore(): void {
   // change it for VIEW_CHANNEL, and Discord asks about every other permission
   // far more often, so bail before doing any work in the common case.
   const handle = (args: any[], ret: any): boolean | undefined => {
-    if (!permissionIncludes(args[0], VIEW_CHANNEL)) return undefined;
+    if (!isViewPermission(args[0])) return undefined;
     return markPermissionResult(args[0], !!ret, findChannelArg(args, 1));
   };
 
@@ -189,7 +193,6 @@ function selectedChannel(): any {
 
 function ensureHiddenStatus(channel: any): boolean {
   if (!isGuildChannelLike(channel)) return false;
-  if (hiddenChannelIds.has(channel.id)) return true;
   const PermissionStore = findStore("PermissionStore");
   try {
     PermissionStore?.can?.(VIEW_CHANNEL, channel);
@@ -214,14 +217,16 @@ function lockIcon(): HTMLElement {
 }
 
 function updateChannelLinks(): void {
-  for (const old of document.querySelectorAll(`.${HIDDEN_ICON_CLASS}`)) old.remove();
-  for (const old of document.querySelectorAll(`.${HIDDEN_LINK_CLASS}`)) old.classList.remove(HIDDEN_LINK_CLASS);
   for (const link of document.querySelectorAll<HTMLElement>('a[href*="/channels/"]')) {
     const channelId = parseChannelIdFromHref(link.getAttribute("href"));
-    if (!channelId || !hiddenChannelIds.has(channelId)) continue;
+    if (!channelId || !hiddenChannelIds.has(channelId)) {
+      link.classList.remove(HIDDEN_LINK_CLASS);
+      link.querySelector(`.${HIDDEN_ICON_CLASS}`)?.remove();
+      continue;
+    }
     link.classList.add(HIDDEN_LINK_CLASS);
     const textTarget = link.querySelector<HTMLElement>('[class*="name_"], [class*="channelName_"]') ?? link;
-    textTarget.appendChild(lockIcon());
+    if (!textTarget.querySelector(`.${HIDDEN_ICON_CLASS}`)) textTarget.appendChild(lockIcon());
   }
 }
 
@@ -258,6 +263,9 @@ function renderLockScreen(channel: any): void {
   }
 
   const typeName = channelTypeName(channel);
+  const contentKey = JSON.stringify([channel.id, channel.name, typeName, channel.lastMessageId, channel.topic]);
+  if (overlay.dataset.contentKey === contentKey && overlay.firstChild) return;
+  overlay.dataset.contentKey = contentKey;
   overlay.replaceChildren();
 
   const card = document.createElement("div");
@@ -303,13 +311,12 @@ function updateLockScreen(): void {
 
 let observer: MutationObserver | null = null;
 let interval: ReturnType<typeof setInterval> | null = null;
-let scheduled = false;
+let scheduled: number | null = null;
 
 function scheduleUpdate(): void {
-  if (scheduled) return;
-  scheduled = true;
-  requestAnimationFrame(() => {
-    scheduled = false;
+  if (scheduled !== null) return;
+  scheduled = requestAnimationFrame(() => {
+    scheduled = null;
     try {
       refreshChannelStore();
       updateChannelLinks();
@@ -334,6 +341,8 @@ const plugin: DiscreatePlugin = {
     log.log("started");
   },
   stop() {
+    if (scheduled !== null) cancelAnimationFrame(scheduled);
+    scheduled = null;
     observer?.disconnect();
     observer = null;
     if (interval) clearInterval(interval);

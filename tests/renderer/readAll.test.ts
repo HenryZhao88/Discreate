@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { collectUnreadChannels } from "../../src/renderer/plugins/readAll/index";
+import { collectUnreadChannels, dispatchReadAll, type ReadAllStores } from "../../src/renderer/plugins/readAll/index";
 
-function fixtureStores() {
+function fixtureStores(): ReadAllStores {
   return {
     GuildStore: { getGuilds: () => ({ g1: { id: "g1" } }) },
     GuildChannelStore: {
@@ -30,5 +30,29 @@ describe("collectUnreadChannels", () => {
     const stores = fixtureStores();
     stores.ReadStateStore.hasUnread = () => false;
     expect(collectUnreadChannels(stores)).toEqual([]);
+  });
+
+  it("dispatches BULK_ACK through the live store dispatcher", () => {
+    const stores = fixtureStores();
+    const actions: unknown[] = [];
+    stores.ReadStateStore._dispatcher = { dispatch: (action) => actions.push(action) };
+
+    expect(dispatchReadAll(stores)).toBe(2);
+    expect(actions).toEqual([{
+      type: "BULK_ACK",
+      context: "APP",
+      channels: [
+        { channelId: "c1", messageId: "last-c1", readStateType: 0 },
+        { channelId: "v1", messageId: "last-v1", readStateType: 0 },
+      ],
+    }]);
+  });
+
+  it("does not route the current store's action to a stale bootstrap dispatcher", () => {
+    const stores = fixtureStores();
+    const actions: unknown[] = [];
+    stores.ReadStateStore._dispatcher = { dispatch: (action) => actions.push(action) };
+    dispatchReadAll(stores, { dispatch() { throw new Error("stale dispatcher"); } });
+    expect(actions).toHaveLength(1);
   });
 });

@@ -11,6 +11,18 @@ function memoryBackend() {
 }
 
 describe("SettingsStore", () => {
+  it("does not share plugin options between independent stores", () => {
+    const a = new SettingsStore(memoryBackend());
+    a.setPluginOptions("isolated", { value: 1 });
+    expect(new SettingsStore(memoryBackend()).getPluginOptions("isolated")).toEqual({});
+  });
+
+  it.each(["null", "[]", '{"enabledPlugins":null,"enabledThemes":12,"pluginOptions":null}'])("validates malformed settings: %s", (raw) => {
+    const store = new SettingsStore({ read: () => raw, write: () => {} });
+    expect(store.isPluginEnabled("x")).toBe(false);
+    expect(store.getEnabledThemes()).toEqual([]);
+    expect(() => store.setPluginOptions("x", { a: 1 })).not.toThrow();
+  });
   it("returns defaults when storage is empty", () => {
     const store = new SettingsStore(memoryBackend());
     expect(store.isPluginEnabled("anything")).toBe(false);

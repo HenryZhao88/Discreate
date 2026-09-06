@@ -68,6 +68,7 @@ describe("ShowHiddenChannels helpers", () => {
     expect(shouldRevealHiddenChannel(1n << 10n, false, channel)).toBe(true);
     expect(shouldRevealHiddenChannel(1n << 10n, true, channel)).toBe(false);
     expect(shouldRevealHiddenChannel(1n << 20n, false, channel)).toBe(false);
+    expect(shouldRevealHiddenChannel((1n << 10n) | (1n << 11n), false, channel)).toBe(false);
     expect(shouldRevealHiddenChannel(1n << 10n, false, { id: "dm1" })).toBe(false);
   });
 });

@@ -20,6 +20,13 @@ function fakeBuildDir(): string {
 }
 
 describe("core-patch", () => {
+  it("does not overwrite an unpatched entry point, even when a stale backup exists", () => {
+    const core = fakeCoreDir();
+    writeFileSync(join(core, "index.js"), "// other loader\n");
+    writeFileSync(join(core, "index.js.discreate-backup"), "// stale backup\n");
+    unpatchCore(core);
+    expect(readFileSync(join(core, "index.js"), "utf8")).toBe("// other loader\n");
+  });
   it("patchCore rewrites index.js to load the loader and backs up the original", () => {
     const core = fakeCoreDir();
     const runtime = mkdtempSync(join(tmpdir(), "rt-"));

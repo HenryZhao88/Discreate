@@ -61,6 +61,8 @@ let snapshot: RelationshipSnapshot = { ...EMPTY_SNAPSHOT, friends: { friends: []
 let options: Options = DEFAULT_OPTIONS;
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 let startupTimer: ReturnType<typeof setTimeout> | null = null;
+let generation = 0;
+let activeAccount: string | undefined;
 let manuallyRemovedFriend: string | undefined;
 let manuallyRemovedGuild: string | undefined;
 let manuallyRemovedGroup: string | undefined;
@@ -131,6 +133,9 @@ function collectSnapshot(): RelationshipSnapshot | null {
   const GuildMemberStore = findStore("GuildMemberStore");
   const ChannelStore = findStore("ChannelStore");
   const RelationshipStore = findStore("RelationshipStore");
+  // A missing store is not evidence that every relationship was removed.
+  if (typeof GuildStore?.getGuilds !== "function" || typeof ChannelStore?.getSortedPrivateChannels !== "function" ||
+      (typeof RelationshipStore?.getMutableRelationships !== "function" && typeof RelationshipStore?.getRelationships !== "function")) return null;
 
   const guilds: Record<string, SimpleGuild> = {};
   for (const [id, guild] of Object.entries<any>(GuildStore?.getGuilds?.() ?? {})) {
@@ -173,15 +178,18 @@ function collectSnapshot(): RelationshipSnapshot | null {
 }
 
 function scheduleSync(): void {
+  // Preserve the on-disk baseline until the startup comparison has run.
+  if (startupTimer !== null) return;
   if (syncTimer) clearTimeout(syncTimer);
   syncTimer = setTimeout(() => {
     syncTimer = null;
-    void sync();
+    void sync().catch((err) => log.warn("sync failed:", err));
   }, 100);
 }
 
 async function sync(): Promise<void> {
   const id = userId();
+  if (id !== activeAccount) return syncAndRunChecks();
   const next = collectSnapshot();
   if (!id || !next) return;
   snapshot = next;
@@ -249,11 +257,14 @@ function userDisplayName(user: any, fallback: string): string {
 }
 
 async function notifyUserRemoval(id: string, message: (name: string) => string): Promise<void> {
+  const currentGeneration = generation;
+  const account = userId();
   const UserUtils = findByProps("getUser");
   const UserStore = findStore("UserStore");
   let user: any;
   try { user = await UserUtils?.getUser?.(id); }
   catch { user = undefined; }
+  if (currentGeneration !== generation || userId() !== account) return;
   user ??= UserStore?.getUser?.(id);
   const icon = user?.getAvatarURL?.(undefined, undefined, false);
   notify(message(userDisplayName(user, id)), icon);
@@ -305,6 +316,7 @@ function handleChannelDelete(action: any): void {
 }
 
 function handleAction(action: any): void {
+  if (activeAccount !== userId()) { scheduleSync(); return; }
   switch (action?.type) {
     case "GUILD_DELETE":
       handleGuildDelete(action);
@@ -365,6 +377,7 @@ async function syncAndRunChecks(): Promise<void> {
   }
 
   snapshot = next;
+  activeAccount = id;
   writeSnapshot(id, snapshot);
 }
 
@@ -396,6 +409,8 @@ const plugin: DiscreatePlugin = {
   description: "Notifies you when a friend, group chat, or server removes you.",
   authors: ["Vencord contributors", "Discreate"],
   start(ctx) {
+    generation++;
+    activeAccount = undefined;
     options = mergeOptions(ctx);
     patchManualActions();
     const dispatcher = Discreate.FluxDispatcher;
@@ -412,6 +427,8 @@ const plugin: DiscreatePlugin = {
     log.log("started");
   },
   stop() {
+    generation++;
+    activeAccount = undefined;
     if (startupTimer) clearTimeout(startupTimer);
     startupTimer = null;
     if (syncTimer) clearTimeout(syncTimer);

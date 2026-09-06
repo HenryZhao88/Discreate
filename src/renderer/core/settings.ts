@@ -12,7 +12,9 @@ interface SettingsData {
   pluginOptions: Record<string, Record<string, unknown>>;
 }
 
-const DEFAULTS: SettingsData = { enabledPlugins: [], enabledThemes: [], pluginOptions: {} };
+function isRecord(value: unknown): value is Record<string, any> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
 export class SettingsStore {
   private data: SettingsData;
@@ -24,7 +26,17 @@ export class SettingsStore {
       try { parsed = JSON.parse(raw); }
       catch { parsed = {}; }
     }
-    this.data = { ...DEFAULTS, ...parsed };
+    const data = isRecord(parsed) ? parsed : {};
+    const strings = (value: unknown): string[] => Array.isArray(value)
+      ? value.filter((v): v is string => typeof v === "string") : [];
+    this.data = {
+      enabledPlugins: strings(data.enabledPlugins),
+      enabledThemes: strings(data.enabledThemes),
+      pluginOptions: Object.assign(Object.create(null), Object.fromEntries(
+        Object.entries(isRecord(data.pluginOptions) ? data.pluginOptions : {})
+          .filter(([, value]) => isRecord(value)),
+      )),
+    };
   }
 
   private persist(): void {

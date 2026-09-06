@@ -1,8 +1,9 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { writeFileSync, chmodSync, mkdirSync } from "node:fs";
+import { launcherScript } from "./launcher.js";
 import { findDiscordInstalls } from "./discord-paths.js";
 import { patchCore, unpatchCore, isCorePatched, installRuntime } from "./core-patch.js";
 
@@ -12,16 +13,7 @@ export function installLauncher(cliPath: string): string {
   mkdirSync(launcherDir, { recursive: true });
   const launcherPath = join(launcherDir, "Discreate.command");
   const nodeBin = process.argv[0] || "node";
-  const content =
-    `#!/bin/bash\n` +
-    `# Discreate launcher — double-click to re-inject and launch Discord.\n` +
-    `cd "$(dirname "$0")"\n` +
-    `echo "Reinjecting Discreate…"\n` +
-    `${JSON.stringify(nodeBin)} ${JSON.stringify(cliPath)} inject\n` +
-    `echo "Launching Discord…"\n` +
-    `open -a /Applications/Discord.app\n` +
-    `echo "Done."\n` +
-    `sleep 1\n`;
+  const content = launcherScript(nodeBin, cliPath);
   writeFileSync(launcherPath, content);
   chmodSync(launcherPath, 0o755);
   return launcherPath;
@@ -34,7 +26,7 @@ const RUNTIME_DIR = join(homedir(), ".discreate", "runtime");
 
 function discordRunning(): boolean {
   try {
-    execSync("pgrep -x Discord", { stdio: "ignore" });
+    execFileSync("pgrep", ["-x", "Discord|Discord PTB|Discord Canary"], { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -79,7 +71,8 @@ function cmdInject(): void {
 
 function cmdUninject(): void {
   requireDiscordQuit();
-  for (const i of findDiscordInstalls()) {
+  for (const i of findDiscordInstalls(true)) {
+    if (!isCorePatched(i.coreDir)) continue;
     unpatchCore(i.coreDir);
     console.log(`Removed Discreate from ${i.branch}`);
   }

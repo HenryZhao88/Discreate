@@ -30,6 +30,7 @@ const STYLE_ID = "discreate-modal-styles";
 const ROOT_ID = "discreate-modal-root";
 const PILL_ID = "discreate-pill";
 const OVERLAY_ID = "discreate-overlay";
+let removeShortcut: (() => void) | undefined;
 
 function ensureStyles(): void {
   if (document.getElementById(STYLE_ID)) return;
@@ -102,6 +103,7 @@ function ensureStyles(): void {
 type Tab = "plugins" | "themes" | "messagelog" | "about";
 
 export function injectSettings(deps: Deps): void {
+  removeShortcut?.();
   ensureStyles();
 
   // Remove any previous mount (e.g. on hot-reload).
@@ -340,6 +342,8 @@ export function injectSettings(deps: Deps): void {
     body.replaceChildren(toolbar);
 
     void import("../plugins/viewDeletedMessages/log.js").then((m) => {
+      // A tab switch or a newer refresh may have replaced this render while importing.
+      if (toolbar.parentElement !== body) return;
       const logFile = m.readLog();
       const entries = [
         ...logFile.deleted.map((d) => ({ kind: "deleted" as const, ...d })),
@@ -432,9 +436,7 @@ export function injectSettings(deps: Deps): void {
   // of its modules) synthetically dispatches a stream of Cmd+Shift+D events at
   // startup, and without this check our toggle fires for each of them, leaving
   // the modal in a random state by the time the user presses the real key.
-  window.addEventListener(
-    "keydown",
-    (e) => {
+  const onKeydown = (e: KeyboardEvent) => {
       if (!e.isTrusted) return;
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.shiftKey && (e.key === "d" || e.key === "D" || e.code === "KeyD")) {
@@ -445,9 +447,9 @@ export function injectSettings(deps: Deps): void {
         e.preventDefault();
         closeModal();
       }
-    },
-    true,
-  );
+    };
+  window.addEventListener("keydown", onKeydown, true);
+  removeShortcut = () => window.removeEventListener("keydown", onKeydown, true);
 
   // On-disk marker for out-of-band verification.
   try {

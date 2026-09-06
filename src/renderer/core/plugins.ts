@@ -2,7 +2,7 @@
 import { makeLogger } from "./logger.js";
 import { unpatchAll } from "./patcher.js";
 import { native } from "./paths.js";
-import { findByPropsLazy } from "./webpack.js";
+import { findStore, waitFor, byStoreName } from "./webpack.js";
 import type { SettingsStore } from "./settings.js";
 import type { DiscreatePlugin, PluginContext } from "../api/index.js";
 
@@ -23,6 +23,7 @@ export class PluginManager {
   constructor(private settings: SettingsStore) {}
 
   register(id: string, plugin: DiscreatePlugin, source: "builtin" | "user" = "builtin", path?: string): void {
+    if (this.registered.some((entry) => entry.id === id)) throw new Error(`Plugin ID already registered: ${id}`);
     this.registered.push({ id, plugin, source, path });
   }
 
@@ -54,6 +55,10 @@ export class PluginManager {
       log.log(`started ${entry.id}`);
       this.writePluginLog(`started ${entry.id}`);
     } catch (err: any) {
+      try { entry.plugin.stop(this.context(entry.id)); }
+      catch (cleanupError) { log.warn(`cleanup failed for ${entry.id}:`, cleanupError); }
+      unpatchAll(entry.id);
+      this.settings.setPluginEnabled(entry.id, false);
       log.error(`failed to start ${entry.id}:`, err);
       this.writePluginLog(`FAILED start ${entry.id}: ${err?.stack ?? err}`);
     }
@@ -239,7 +244,9 @@ function appendBdLog(line: string): void {
 /**
  * Wrap a BD plugin instance into a Discreate plugin.
  */
-function wrapBdInstance(instance: any, meta: BdMeta): DiscreatePlugin {
+export function wrapBdInstance(instance: any, meta: BdMeta): DiscreatePlugin {
+  let cancelStart: (() => void) | undefined;
+  let started = false;
   return {
     name: meta.name,
     description: meta.description,
@@ -250,62 +257,25 @@ function wrapBdInstance(instance: any, meta: BdMeta): DiscreatePlugin {
       // channel — so until that happens, the plugin's initialize() will
       // throw on a MessageStore lookup. Wait for the store to appear (a
       // CHANNEL_SELECT loads the relevant chunk), then call start().
-      void waitForMessageStore().then(() => {
+      cancelStart?.();
+      const start = () => {
+        started = true;
         try { instance.load?.(); } catch (e) { log.warn(`${meta.name}.load() threw:`, e); }
         try { instance.start?.(); } catch (e) { log.error(`${meta.name}.start() threw:`, e); }
         appendBdLog(`bd-start ${meta.name} (after MessageStore ready)`);
-      }).catch((e) => log.error(`${meta.name} deferred start failed:`, e));
+      };
+      if (findStore("MessageStore")) { start(); cancelStart = undefined; }
+      else cancelStart = waitFor(byStoreName("MessageStore"), start);
     },
     stop() {
+      cancelStart?.();
+      cancelStart = undefined;
+      if (!started) return;
+      started = false;
       try { instance.stop?.(); } catch (e) { log.error(`${meta.name}.stop() threw:`, e); }
       try { instance.unload?.(); } catch (e) { log.warn(`${meta.name}.unload() threw:`, e); }
     },
   };
-}
-
-/**
- * Resolve once Discord's MessageStore has been loaded (and so its module is
- * findable). Discord loads MessageStore on first CHANNEL_SELECT — we either
- * see the store synchronously (it's already there) or wait at most 10 minutes
- * for a channel-open event. If the user never opens a channel, the deferred
- * BD-plugin start simply never runs, which is fine.
- */
-function waitForMessageStore(): Promise<void> {
-  return new Promise((resolve) => {
-    function probe(): boolean {
-      try {
-        const store = findByPropsLazy("getMessage", "getMessages");
-        return !!store;
-      } catch {
-        return false;
-      }
-    }
-    if (probe()) return resolve();
-
-    // Poll every second; resolve on first hit. Also subscribe to
-    // FluxDispatcher CHANNEL_SELECT, which is the canonical trigger.
-    const interval = setInterval(() => {
-      if (probe()) {
-        clearInterval(interval);
-        resolve();
-      }
-    }, 1000);
-
-    try {
-      const dispatcher = (window as any).BdApi?.Webpack?.getByKeys?.("dispatch", "subscribe")
-        ?? (window as any).DiscreateFluxDispatcher;
-      if (dispatcher?.subscribe) {
-        const handler = () => {
-          dispatcher.unsubscribe?.("CHANNEL_SELECT", handler);
-          // give the store one tick to populate after the chunk loads
-          setTimeout(() => {
-            if (probe()) { clearInterval(interval); resolve(); }
-          }, 50);
-        };
-        dispatcher.subscribe("CHANNEL_SELECT", handler);
-      }
-    } catch { /* the polling fallback covers us */ }
-  });
 }
 
 export function loadUserPlugins(manager: PluginManager): void {

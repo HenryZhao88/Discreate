@@ -89,11 +89,31 @@ export function findCoreDir(base: string): string | null {
   return null;
 }
 
-export function findDiscordInstalls(): DiscordInstall[] {
+/** Enumerate old versions and module revisions too, so uninstall undoes self-heal. */
+export function findAllCoreDirs(base: string): string[] {
+  let versions: string[];
+  try { versions = readdirSync(base); } catch { return []; }
+  const cores: string[] = [];
+  for (const version of versions) {
+    if (!versionOf(version)) continue;
+    const modules = join(base, version, "modules");
+    let entries: string[];
+    try { entries = readdirSync(modules); } catch { continue; }
+    for (const entry of entries) {
+      const core = entry === "discord_desktop_core" ? join(modules, entry)
+        : /^discord_desktop_core-\d+$/.test(entry) ? join(modules, entry, "discord_desktop_core") : null;
+      if (core && hasCoreFiles(core)) cores.push(core);
+    }
+  }
+  return cores;
+}
+
+export function findDiscordInstalls(allVersions = false): DiscordInstall[] {
   const installs: DiscordInstall[] = [];
   for (const branch of ["stable", "ptb", "canary"] as Branch[]) {
-    const coreDir = findCoreDir(appSupportDir(branch));
-    if (coreDir) installs.push({ branch, coreDir });
+    const base = appSupportDir(branch);
+    const cores = allVersions ? findAllCoreDirs(base) : [findCoreDir(base)];
+    for (const coreDir of cores) if (coreDir) installs.push({ branch, coreDir });
   }
   return installs;
 }

@@ -45,7 +45,7 @@ async function boot(): Promise<void> {
     // MessageStore, ChannelStore, FluxDispatcher, etc. Without this, only the
     // entry-bundle modules (~100) are in the cache and almost every Flux store
     // looks "missing".
-    forceLoadAllChunks().finally(() => {
+    forceLoadAllChunks().catch((err) => log.warn("chunk loading failed:", err)).then(() => {
       // ReactDOM 18 ships `createRoot` in `react-dom/client` and the legacy
       // `render` in `react-dom`; finders for the union miss. Pull both and
       // present a merged object.
@@ -69,8 +69,8 @@ async function boot(): Promise<void> {
       plugins.startEnabled();
       injectSettings({ plugins, themes, settings });
       log.log("ready");
-    });
+    }).catch((err) => log.error("bootstrap failed:", err));
   });
 }
 
-boot();
+void boot().catch((err) => log.error("boot failed:", err));

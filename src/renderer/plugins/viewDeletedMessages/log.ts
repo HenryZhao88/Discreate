@@ -30,6 +30,7 @@ export interface LogFile {
 
 /** Keep only the last `cap` entries of a list. */
 export function capEntries<T>(entries: T[], cap: number): T[] {
+  cap = Number.isFinite(cap) ? Math.max(0, Math.floor(cap)) : 500;
   return entries.length > cap ? entries.slice(entries.length - cap) : entries;
 }
 
@@ -60,10 +61,16 @@ export function parseLogFile(raw: string | null): LogFile {
   } catch {
     return { deleted: [], edits: [] };
   }
-  if (Array.isArray(data)) return { deleted: data as DeletedRecord[], edits: [] };
+  if (data === null || typeof data !== "object") return { deleted: [], edits: [] };
+  const validRecord = (rec: any) => rec && typeof rec.channelId === "string" &&
+    typeof rec.messageId === "string" && typeof rec.author === "string" && Number.isFinite(rec.timestamp);
+  const deleted = (items: any[]) => items.filter((rec) => validRecord(rec) && typeof rec.content === "string");
+  const edits = (items: any[]) => items.filter((rec) => validRecord(rec) && Array.isArray(rec.history))
+    .map((rec) => ({ ...rec, history: rec.history.filter((entry: any) => entry && Number.isFinite(entry.time) && typeof entry.content === "string") }));
+  if (Array.isArray(data)) return { deleted: deleted(data), edits: [] };
   return {
-    deleted: Array.isArray(data.deleted) ? data.deleted : [],
-    edits: Array.isArray(data.edits) ? data.edits : [],
+    deleted: Array.isArray(data.deleted) ? deleted(data.deleted) : [],
+    edits: Array.isArray(data.edits) ? edits(data.edits) : [],
   };
 }
 
@@ -84,12 +91,18 @@ function writeLog(log: LogFile): void {
   native().writeDeletedLog(serializeLogFile(log));
 }
 
+/** The configured cap applies across both kinds of records. */
+function capLog(log: LogFile, cap: number): LogFile {
+  const kept = new Set(capEntries([...log.deleted, ...log.edits].sort((a, b) => a.timestamp - b.timestamp), cap));
+  return { deleted: log.deleted.filter((rec) => kept.has(rec)), edits: log.edits.filter((rec) => kept.has(rec)) };
+}
+
 /** Append a deleted-message record, capping total deleted entries. */
 export function recordDeleted(rec: DeletedRecord, cap: number): void {
   const log = readLog();
+  log.deleted = log.deleted.filter((entry) => entry.messageId !== rec.messageId);
   log.deleted.push(rec);
-  log.deleted = capEntries(log.deleted, cap);
-  writeLog(log);
+  writeLog(capLog(log, cap));
 }
 
 /** Append/replace an edit record for a message, capping total edit entries. */
@@ -98,8 +111,7 @@ export function recordEdit(rec: EditRecord, cap: number): void {
   const existing = log.edits.findIndex((e) => e.messageId === rec.messageId);
   if (existing >= 0) log.edits[existing] = rec;
   else log.edits.push(rec);
-  log.edits = capEntries(log.edits, cap);
-  writeLog(log);
+  writeLog(capLog(log, cap));
 }
 
 /** Remove a deleted record by message id (used by "delete locally"). */

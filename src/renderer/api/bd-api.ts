@@ -7,7 +7,7 @@
 // rather than throwing, so partial BdApi gaps degrade gracefully.
 
 import { Discreate } from "./index.js";
-import { find, findByProps, findByPropsLazy, findByCode, findByFactorySource, findByFactorySourceExport, byProps, byCode } from "../core/webpack.js";
+import { find, findAll, findStore, waitFor, findByProps, findByPropsLazy, findByCode, findByFactorySource, findByFactorySourceExport, byProps, byCode } from "../core/webpack.js";
 import { before, after, instead, unpatchAll } from "../core/patcher.js";
 import { native } from "../core/paths.js";
 import { makeLogger } from "../core/logger.js";
@@ -119,27 +119,7 @@ export const BdUtils = { findInTree, getNestedValue, semverCompare, className };
 // Webpack
 // ---------------------------------------------------------------------------
 
-function buildWebpack(): any {
-  function findAll(filter: (m: any) => boolean): any[] {
-    // best-effort: scan our cache via repeated `find` not possible; expose via
-    // proxy over the wp cache. Simpler: re-scan __webpack_require__.c.
-    const out: any[] = [];
-    const wp: any = (window as any).webpackChunkdiscord_app;
-    const req: any = (window as any).__webpack_require__;
-    const c = req?.c;
-    if (c) {
-      for (const id of Object.keys(c)) {
-        const ex = c[id]?.exports;
-        if (!ex) continue;
-        try { if (filter(ex)) out.push(ex); } catch { /* skip */ }
-        if (ex.default) {
-          try { if (filter(ex.default)) out.push(ex.default); } catch { /* skip */ }
-        }
-      }
-    }
-    void wp;
-    return out;
-  }
+export function buildWebpack(): any {
 
   const Filters = {
     byKeys: (...keys: string[]) => byProps(...keys),
@@ -157,26 +137,7 @@ function buildWebpack(): any {
     if (opts && opts.first === false) {
       return findAll(f);
     }
-    const direct = find(f);
-    if (direct) return direct;
-    if (opts && opts.searchExports) {
-      // probe individual exports of every module
-      const req: any = (window as any).__webpack_require__;
-      const c = req?.c;
-      if (c) {
-        for (const id of Object.keys(c)) {
-          const ex = c[id]?.exports;
-          if (!ex || typeof ex !== "object") continue;
-          for (const k of Object.keys(ex)) {
-            try {
-              const v = ex[k];
-              if (v != null && f(v)) return v;
-            } catch { /* skip */ }
-          }
-        }
-      }
-    }
-    return undefined;
+    return find(f);
   }
 
   function getByKeys(...keys: string[]): any { return findByPropsLazy(...keys); }
@@ -196,7 +157,7 @@ function buildWebpack(): any {
     const frags: string[] = [];
     for (const a of items) {
       if (typeof a === "string") frags.push(a);
-      else if (Array.isArray(a)) for (const s of a) if (typeof s === "string") frags.push(s);
+      else if (Array.isArray(a)) { for (const s of a) if (typeof s === "string") frags.push(s); }
       else if (typeof a === "function") frags.push(Function.prototype.toString.call(a));
     }
     return { frags, opts };
@@ -231,15 +192,7 @@ function buildWebpack(): any {
     }
     void opts;
     const matches = (proto: any) => proto && keys.every((k) => proto[k] !== undefined);
-    return find((mod) => {
-      if (typeof mod === "function" && matches(mod.prototype)) return true;
-      if (mod && typeof mod === "object") {
-        for (const v of Object.values(mod)) {
-          if (typeof v === "function" && matches((v as any).prototype)) return true;
-        }
-      }
-      return false;
-    });
+    return find((mod) => typeof mod === "function" && matches(mod.prototype));
   }
 
   /** Aliases some BD plugins use. */
@@ -250,29 +203,30 @@ function buildWebpack(): any {
   function getMangled(filter: any, mapping: Record<string, any>): any {
     const result: Record<string, any> = {};
     if (!mapping) return result;
+    const module = getModule(filter);
+    if (module == null) return result;
+    const values: any[] = [];
+    for (const key of Object.keys(module)) {
+      try { values.push(module[key]); } catch { /* skip throwing exports */ }
+    }
     for (const key of Object.keys(mapping)) {
       const m = mapping[key];
       if (typeof m === "function") {
-        result[key] = getModule(m);
+        result[key] = values.find((value) => {
+          try { return m(value); } catch { return false; }
+        });
       } else {
         result[key] = undefined;
       }
     }
-    void filter;
     return result;
   }
 
   // Lazy stores proxy: BdApi.Webpack.Stores.MessageStore -> findByProps lookup
-  const storeCache = new Map<string, any>();
   const Stores = new Proxy({}, {
     get(_t, key: string) {
       if (typeof key !== "string") return undefined;
-      if (storeCache.has(key)) return storeCache.get(key);
-      const found = find((m) => m && typeof m.getName === "function" && (() => {
-        try { return m.getName() === key; } catch { return false; }
-      })());
-      if (found) storeCache.set(key, found);
-      return found;
+      return findStore(key);
     },
   });
 
@@ -287,7 +241,7 @@ function buildWebpack(): any {
     getByDisplayName,
     getMangled,
     // Common BD aliases
-    waitForModule: (filter: any) => getModule(filter),
+    waitForModule: (filter: any) => new Promise((resolve) => waitFor(filter, resolve)),
     modules: [],
   };
 }
@@ -296,15 +250,15 @@ function buildWebpack(): any {
 // Patcher
 // ---------------------------------------------------------------------------
 
-function buildPatcher(): any {
+export function buildPatcher(): any {
   return {
     before(caller: string, target: any, key: string, fn: (ctx: any, args: any[]) => any) {
-      return before(caller, target, key, (args) => { try { fn({}, args); } catch (e) { log.error("patcher.before cb threw:", e); } });
+      return before(caller, target, key, function (this: any, args) { try { fn(this, args); } catch (e) { log.error("patcher.before cb threw:", e); } });
     },
     after(caller: string, target: any, key: string, fn: (ctx: any, args: any[], ret: any) => any) {
-      return after(caller, target, key, (args, ret) => {
+      return after(caller, target, key, function (this: any, args, ret) {
         try {
-          const r = fn({}, args, ret);
+          const r = fn(this, args, ret);
           return r === undefined ? ret : r;
         } catch (e) {
           log.error("patcher.after cb threw:", e);
@@ -313,9 +267,9 @@ function buildPatcher(): any {
       });
     },
     instead(caller: string, target: any, key: string, fn: (ctx: any, args: any[], orig: Function) => any) {
-      return instead(caller, target, key, (args, orig) => {
+      return instead(caller, target, key, function (this: any, args, orig) {
         try {
-          return fn({}, args, orig);
+          return fn(this, args, orig);
         } catch (e) {
           log.error("patcher.instead cb threw:", e);
           return undefined;
