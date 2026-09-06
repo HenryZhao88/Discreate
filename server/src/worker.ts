@@ -5,7 +5,7 @@ function today(): string {
 }
 
 function isValidPayload(p: any): p is { id: string } {
-  return p && typeof p.id === "string" && /^[0-9a-f]+$/.test(p.id)
+  return p && typeof p.id === "string" && /^[0-9a-f]{16}$/.test(p.id)
     && typeof p.v === "string" && typeof p.os === "string";
 }
 
