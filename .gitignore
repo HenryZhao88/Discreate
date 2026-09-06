@@ -5,3 +5,6 @@ Vencord-main/
 .DS_Store
 # SDD workspace (git-ignored scratch)
 .superpowers/
+
+# Internal working notes — not part of the shipped project
+docs/
