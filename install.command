@@ -17,11 +17,17 @@ die() { printf "\n\033[1;31mERROR:\033[0m %s\n" "$1" >&2; exit 1; }
 
 mkdir -p "$ROOT"
 
-# 1. Self-copy so the in-app "Update" has a stable path to re-run.
-SELF="${BASH_SOURCE[0]}"
-if [ "$(cd "$(dirname "$SELF")" && pwd)/$(basename "$SELF")" != "$ROOT/install.command" ]; then
-  cp "$SELF" "$ROOT/install.command"
-  chmod +x "$ROOT/install.command"
+# 1. Keep a stable copy at ~/.discreate/install.command so the in-app "Update"
+#    button can re-run it. When run from a real file, copy it; when run via
+#    `curl ... | bash` (no real file), fetch a fresh copy from GitHub.
+SELF="${BASH_SOURCE[0]:-}"
+TARGET="$ROOT/install.command"
+if [ -f "$SELF" ]; then
+  if [ "$(cd "$(dirname "$SELF")" && pwd)/$(basename "$SELF")" != "$TARGET" ]; then
+    cp "$SELF" "$TARGET" && chmod +x "$TARGET"
+  fi
+else
+  curl -fsSL "https://raw.githubusercontent.com/$REPO/$BRANCH/install.command" -o "$TARGET" 2>/dev/null && chmod +x "$TARGET" || true
 fi
 
 # 2. Quit-check Discord (inject cannot patch a running client).
