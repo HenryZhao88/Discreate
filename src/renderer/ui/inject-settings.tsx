@@ -121,7 +121,7 @@ export function renderUpdateBanner(
   msg.textContent = "A new version of Discreate is available.";
   const btn = document.createElement("button");
   btn.textContent = "Update";
-  btn.className = "dc-btn dc-btn-primary";
+  btn.className = "dc-btn primary";
   btn.addEventListener("click", onUpdate);
   bar.append(msg, btn);
   return bar;

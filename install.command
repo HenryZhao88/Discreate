@@ -80,6 +80,14 @@ rm -f "$BUILD/src.tar.gz"
 # 5. Build (needs only esbuild; version comes from the source's package.json).
 cd "$BUILD"
 ESBUILD_VER="$("$NODE_BIN" -e 'process.stdout.write(require("./package.json").devDependencies.esbuild.replace(/[^0-9.]/g,""))')"
+# Strip the dependency lists from the build copy of package.json so that
+# `npm install esbuild` doesn't also reify the whole devDependency tree
+# (Electron et al.) — npm install <pkg> reifies existing deps too.
+"$NODE_BIN" -e '
+  const fs=require("fs"),p="package.json",j=JSON.parse(fs.readFileSync(p,"utf8"));
+  delete j.dependencies; delete j.devDependencies; delete j.peerDependencies;
+  fs.writeFileSync(p,JSON.stringify(j,null,2));
+'
 say "Building (esbuild ${ESBUILD_VER})…"
 "$NPM_BIN" install --no-audit --no-fund --loglevel=error "esbuild@${ESBUILD_VER}" >/dev/null 2>&1 \
   || die "Failed to install build tools."

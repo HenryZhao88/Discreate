@@ -37,6 +37,15 @@ describe("install.command", () => {
     expect(src).not.toMatch(/rm -rf\s+"?\$\{?HOME\}?\/\.discreate"?\s*$/m);
     expect(src).not.toMatch(/settings\.json|deleted-log\.json/);
   });
+  it("strips devDependencies from the build package.json before installing esbuild, so npm doesn't reify the whole devDependency tree (Electron etc.)", () => {
+    expect(src).toContain("delete j.devDependencies");
+    const stripIndex = src.indexOf("delete j.devDependencies");
+    const installIndex = src.indexOf('install --no-audit --no-fund --loglevel=error "esbuild@');
+    expect(stripIndex).toBeGreaterThan(-1);
+    expect(installIndex).toBeGreaterThan(-1);
+    expect(stripIndex).toBeLessThan(installIndex);
+  });
+
   it("is committed executable", () => {
     const mode = statSync(new URL("../../install.command", import.meta.url)).mode;
     expect(mode & 0o111).toBeTruthy(); // some execute bit set
