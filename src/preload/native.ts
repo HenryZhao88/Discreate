@@ -46,6 +46,13 @@ function deriveFilename(url: string): string {
   }
 }
 
+/** Compute the `open` args for the installer, verifying it exists. Exported for testing. */
+export function installerLaunchArgs(root: string, exists: (p: string) => boolean): string[] {
+  const p = join(root, "install.command");
+  if (!exists(p)) throw new Error("installer not found: " + p);
+  return [p];
+}
+
 export function exposeNative(): void {
   ensureLayout();
   contextBridge.exposeInMainWorld("DiscreateNative", {
@@ -110,6 +117,15 @@ export function exposeNative(): void {
 
     /** Fetch a URL as text via the main process (bypasses renderer CSP). */
     fetchText: (url: string): Promise<string> => fetchText(url),
+
+    readInstalled: () => {
+      const f = join(ROOT, "installed.json");
+      return existsSync(f) ? readFileSync(f, "utf8") : null;
+    },
+    runInstaller: (): void => {
+      const args = installerLaunchArgs(ROOT, existsSync);
+      spawn("open", args, { detached: true, stdio: "ignore" }).unref();
+    },
 
     /**
      * Download a URL into themes or plugins. Validates the destination folder
