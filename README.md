@@ -14,17 +14,29 @@ plugin compatibility.
 macOS only. The injector targets `~/Library/Application Support` and uses
 macOS commands. Windows/Linux are not supported.
 
-## Install
+## Install (macOS)
+
+1. Download **`install.command`** from this repository (the file at the top level — click it, then the download/raw button).
+2. Because it isn't code-signed, macOS blocks it the first time: **right-click the file → Open → Open**. (You only do this once.)
+3. Quit Discord completely first (Cmd+Q). Then follow the Terminal window the installer opens — it downloads Discreate, builds it, and injects it. No other software needed.
+4. Launch Discord. Open Settings to find the Discreate panel.
+
+The installer keeps your data (settings, logs, plugins, themes) in `~/.discreate`.
+
+## Updating
+
+Discreate checks for updates on launch. When a new version is available, the
+Discreate settings panel shows an **Update** button — click it (quit Discord
+when asked) and it reinstalls the latest version, keeping your data. You can
+also just run `install.command` again anytime.
+
+## Building from source (developers)
 
 ```bash
 pnpm install
 pnpm build
 node dist/injector/cli.js inject
 ```
-
-Quit Discord fully (Cmd+Q) first. Then launch Discord — open Settings to find
-the Discreate panel. Custom plugins go in `~/.discreate/plugins`, themes in
-`~/.discreate/themes`.
 
 ## Uninstall
 
