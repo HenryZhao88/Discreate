@@ -51,9 +51,9 @@ devices use it. It contains a hashed device id (derived from your hardware id,
 one-way, not reversible), the Discreate version, and your OS name/version/arch —
 nothing else. No Discord account, message, server, or channel data is ever
 sent, and your IP address is never stored. The server keeps only
-`deviceId -> date`. The server source is in `server/`. See `PRIVACY.md`.
+`deviceId -> date`. The server source is in `server/`.
 
 ## License
 
-GPL-3.0. See `LICENSE` and `NOTICE`. Most plugins and themes are adapted from
+GPL-3.0. See `LICENSE`. Most plugins and themes are adapted from
 Vencord and the BetterDiscord community and were not created by me.
