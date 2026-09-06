@@ -1,0 +1,8 @@
+# server/wrangler.toml
+name = "discreate-telemetry"
+main = "src/worker.ts"
+compatibility_date = "2026-09-06"
+
+[[kv_namespaces]]
+binding = "COUNTS"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"

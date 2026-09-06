@@ -1,6 +1,8 @@
 // build.mjs
 import { build } from "esbuild";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
+
+const pkgVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
 
 mkdirSync("dist/build", { recursive: true });
 mkdirSync("dist/injector", { recursive: true });
@@ -14,6 +16,7 @@ await build({
   outfile: "dist/build/loader.js",
   format: "cjs",
   external: ["electron"],
+  define: { DISCREATE_VERSION: JSON.stringify(pkgVersion) },
 });
 
 // Preload bridge -> dist/build/preload.js

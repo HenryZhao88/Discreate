@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { selfHealSiblings } from "./self-heal.js";
 import { findDiscordInstalls } from "../injector/discord-paths.js";
 import { patchCore } from "../injector/core-patch.js";
+import { sendTelemetry } from "../telemetry/index.js";
 
 const PRELOAD = join(__dirname, "preload.js");
 const RUNTIME_DIR = __dirname; // loader.js sits alongside preload.js + renderer.js
@@ -53,12 +54,14 @@ function registerReinjectIpc(): void {
 // bootstrap *after* the app "ready" event has already fired, so a "ready"
 // listener would never run. Register immediately when the app is already
 // ready; this still happens before core.asar creates Discord's window.
-if (electron.app.isReady()) {
+function onReady(): void {
   registerPreload();
   registerReinjectIpc();
+  try { sendTelemetry(); } catch { /* telemetry must never break boot */ }
+}
+
+if (electron.app.isReady()) {
+  onReady();
 } else {
-  electron.app.once("ready", () => {
-    registerPreload();
-    registerReinjectIpc();
-  });
+  electron.app.once("ready", onReady);
 }

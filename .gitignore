@@ -3,3 +3,5 @@ dist/
 pnpm-workspace.yaml
 Vencord-main/
 .DS_Store
+# SDD workspace (git-ignored scratch)
+.superpowers/
