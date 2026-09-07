@@ -10,21 +10,16 @@ and enough BetterDiscord compatibility to run many `.plugin.js` files unchanged.
 
 ## Install
 
-Quit Discord (⌘Q), then run:
+Quit Discord and run:
 
 ```
 curl -fsSL https://raw.githubusercontent.com/HenryZhao88/Discreate/main/install.command | bash
 ```
 
-It fetches the latest source, builds it, and injects — no Node or toolchain
-needed on your end. Relaunch Discord and press **⌘⇧D** to open the panel.
-
 Rather not touch the Terminal? Download `Discreate-Installer.zip` from the
 [latest release](https://github.com/HenryZhao88/Discreate/releases/latest),
 unzip it, and right-click `install.command` → **Open** (unsigned apps need this
 once). If macOS complains about permissions, use the command above instead.
-
-Your config, plugins, themes, and logs live in `~/.discreate`.
 
 ## Updating
 
@@ -68,15 +63,6 @@ pnpm install
 pnpm build
 node dist/injector/cli.js inject
 ```
-
-## Telemetry
-
-One anonymous ping per launch, so the project can count devices. It sends a
-one-way hash of your machine id, the Discreate version, and your OS name/version/
-architecture — nothing else. No account, message, server, or channel data is
-touched, and your IP is never stored; the server records only `deviceId → date`.
-The server is open in [`server/`](server/). To opt out, point
-`TELEMETRY_ENDPOINT` in `src/telemetry/report.ts` elsewhere and rebuild.
 
 ## License
 
