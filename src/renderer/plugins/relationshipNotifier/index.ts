@@ -218,16 +218,31 @@ function showNotice(text: string): void {
   setTimeout(() => notice.remove(), 8000);
 }
 
+function toastContainer(): HTMLElement {
+  const id = "discreate-rn-toasts";
+  let c = document.getElementById(id);
+  if (!c) {
+    c = document.createElement("div");
+    c.id = id;
+    c.style.cssText =
+      "position:fixed;right:24px;bottom:24px;z-index:2147483647;" +
+      "display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:none";
+    document.body.appendChild(c);
+  }
+  return c;
+}
+
 function showToast(text: string): void {
   const toast = document.createElement("div");
   toast.className = "dc-rn-toast";
   toast.textContent = text;
   toast.style.cssText =
-    "position:fixed;right:24px;bottom:24px;z-index:2147483647;" +
     "max-width:360px;background:#1e1f22;color:#f2f3f5;padding:12px 14px;" +
     "border:1px solid #2b2d31;border-radius:6px;font:14px/1.35 system-ui,sans-serif;" +
-    "box-shadow:0 8px 24px rgba(0,0,0,.45)";
-  document.body.appendChild(toast);
+    "box-shadow:0 8px 24px rgba(0,0,0,.45);pointer-events:auto";
+  // Stacked in a flex column so multiple toasts push each other up instead of
+  // overlapping at the same fixed position.
+  toastContainer().appendChild(toast);
   setTimeout(() => toast.remove(), 6000);
 }
 
