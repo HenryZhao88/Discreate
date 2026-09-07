@@ -1,6 +1,10 @@
 // src/renderer/core/patcher.ts
+import { makeLogger } from "./logger.js";
+
 type AnyFn = (...args: any[]) => any;
 type Unpatch = () => void;
+
+const log = makeLogger("patcher");
 
 const registry = new Map<string, Unpatch[]>();
 interface PatchState {
@@ -55,12 +59,16 @@ function patch(
   return track(owner, unpatch);
 }
 
+// Plugin callbacks are isolated: a throwing hook is logged and swallowed so it
+// can never break the host method (e.g. FluxDispatcher.dispatch) or other
+// plugins' patches stacked on the same target.
 export function before(
   owner: string, target: any, key: string,
   fn: (args: any[]) => void,
 ): Unpatch {
   return patch(owner, target, key, (orig) => function (this: any, ...args: any[]) {
-    fn.call(this, args);
+    try { fn.call(this, args); }
+    catch (err) { log.error(`before hook for ${owner} on ${key} threw:`, err); }
     return orig.apply(this, args);
   });
 }
@@ -71,8 +79,13 @@ export function after(
 ): Unpatch {
   return patch(owner, target, key, (orig) => function (this: any, ...args: any[]) {
     const ret = orig.apply(this, args);
-    const replaced = fn.call(this, args, ret);
-    return replaced === undefined ? ret : replaced;
+    try {
+      const replaced = fn.call(this, args, ret);
+      return replaced === undefined ? ret : replaced;
+    } catch (err) {
+      log.error(`after hook for ${owner} on ${key} threw:`, err);
+      return ret;
+    }
   });
 }
 
@@ -81,7 +94,11 @@ export function instead(
   fn: (args: any[], orig: AnyFn) => any,
 ): Unpatch {
   return patch(owner, target, key, (orig) => function (this: any, ...args: any[]) {
-    return fn.call(this, args, orig.bind(this));
+    try { return fn.call(this, args, orig.bind(this)); }
+    catch (err) {
+      log.error(`instead hook for ${owner} on ${key} threw; falling back to original:`, err);
+      return orig.apply(this, args);
+    }
   });
 }
 

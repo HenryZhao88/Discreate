@@ -62,4 +62,38 @@ describe("patcher", () => {
     unpatchAll("t");
     expect(obj.val()).toBe(1);
   });
+
+  it("isolates a throwing before-hook: original still runs, no throw propagates", () => {
+    const obj = { val: (a: number) => a + 1 };
+    before("t", obj, "val", () => { throw new Error("boom"); });
+    expect(() => obj.val(1)).not.toThrow();
+    expect(obj.val(1)).toBe(2); // original executed normally
+    unpatchAll("t");
+  });
+
+  it("isolates a throwing after-hook: returns the original result, no throw", () => {
+    const obj = { val: () => 5 };
+    after("t", obj, "val", () => { throw new Error("boom"); });
+    expect(() => obj.val()).not.toThrow();
+    expect(obj.val()).toBe(5);
+    unpatchAll("t");
+  });
+
+  it("isolates a throwing instead-hook: falls back to the original, no throw", () => {
+    const obj = { val: (a: number) => a * 2 };
+    instead("t", obj, "val", () => { throw new Error("boom"); });
+    expect(() => obj.val(3)).not.toThrow();
+    expect(obj.val(3)).toBe(6);
+    unpatchAll("t");
+  });
+
+  it("a throwing hook does not break a stacked hook from another owner", () => {
+    const obj = { val: () => 1 };
+    before("bad", obj, "val", () => { throw new Error("boom"); });
+    after("good", obj, "val", (_args, ret) => ret + 100);
+    expect(obj.val()).toBe(101); // good owner's patch still applies
+    unpatchAll("bad");
+    unpatchAll("good");
+  });
+
 });
