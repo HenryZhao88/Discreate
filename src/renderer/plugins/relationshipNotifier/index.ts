@@ -8,6 +8,13 @@ import { native } from "../../core/paths.js";
 const OWNER = "relationshipNotifier";
 const log = makeLogger("RelationshipNotifier");
 
+// TEMP diagnostic: file-based trace that survives a UI freeze (console may not).
+// Remove once the hang is diagnosed. cat ~/.discreate/rn-debug.log
+function trace(msg: string): void {
+  try { native().appendText(`${native().root}/rn-debug.log`, `${new Date().toISOString()} ${msg}\n`); }
+  catch { /* ignore */ }
+}
+
 const GROUP_DM = 3;
 const FRIEND = 1;
 const INCOMING_REQUEST = 3;
@@ -126,8 +133,9 @@ function iconUrl(kind: "guild" | "group", id: string, icon?: string): string | u
 }
 
 function collectSnapshot(): RelationshipSnapshot | null {
+  trace("collectSnapshot: enter");
   const me = userId();
-  if (!me) return null;
+  if (!me) { trace("collectSnapshot: no userId -> null"); return null; }
 
   const GuildStore = findStore("GuildStore");
   const GuildMemberStore = findStore("GuildMemberStore");
@@ -135,7 +143,8 @@ function collectSnapshot(): RelationshipSnapshot | null {
   const RelationshipStore = findStore("RelationshipStore");
   // A missing store is not evidence that every relationship was removed.
   if (typeof GuildStore?.getGuilds !== "function" || typeof ChannelStore?.getSortedPrivateChannels !== "function" ||
-      (typeof RelationshipStore?.getMutableRelationships !== "function" && typeof RelationshipStore?.getRelationships !== "function")) return null;
+      (typeof RelationshipStore?.getMutableRelationships !== "function" && typeof RelationshipStore?.getRelationships !== "function")) { trace("collectSnapshot: missing store -> null"); return null; }
+  trace("collectSnapshot: stores ok, iterating guilds");
 
   const guilds: Record<string, SimpleGuild> = {};
   for (const [id, guild] of Object.entries<any>(GuildStore?.getGuilds?.() ?? {})) {
@@ -153,6 +162,7 @@ function collectSnapshot(): RelationshipSnapshot | null {
     };
   }
 
+  trace(`collectSnapshot: guilds done (${Object.keys(guilds).length}), iterating groups`);
   const groups: Record<string, SimpleGroupChannel> = {};
   for (const channel of ChannelStore?.getSortedPrivateChannels?.() ?? []) {
     if (channel?.type !== GROUP_DM) continue;
@@ -163,17 +173,20 @@ function collectSnapshot(): RelationshipSnapshot | null {
     };
   }
 
+  trace(`collectSnapshot: groups done (${Object.keys(groups).length}), reading relationships`);
   const friends = { friends: [] as string[], requests: [] as string[] };
   const relationships = RelationshipStore?.getMutableRelationships?.() ?? RelationshipStore?.getRelationships?.();
   const entries =
     relationships instanceof Map
       ? [...relationships.entries()]
       : Object.entries(relationships ?? {});
+  trace(`collectSnapshot: relationships entries=${entries.length}, iterating`);
   for (const [id, type] of entries) {
     if (type === FRIEND) friends.friends.push(id);
     if (type === INCOMING_REQUEST) friends.requests.push(id);
   }
 
+  trace(`collectSnapshot: done (friends=${friends.friends.length}, requests=${friends.requests.length})`);
   return { guilds, groups, friends };
 }
 
@@ -257,13 +270,16 @@ function userDisplayName(user: any, fallback: string): string {
 }
 
 async function notifyUserRemoval(id: string, message: (name: string) => string): Promise<void> {
+  trace(`notifyUserRemoval: enter ${id}`);
   const currentGeneration = generation;
   const account = userId();
   const UserUtils = findByProps("getUser");
   const UserStore = findStore("UserStore");
   let user: any;
+  trace(`notifyUserRemoval: before getUser ${id}`);
   try { user = await UserUtils?.getUser?.(id); }
   catch { user = undefined; }
+  trace(`notifyUserRemoval: after getUser ${id}`);
   if (currentGeneration !== generation || userId() !== account) return;
   user ??= UserStore?.getUser?.(id);
   const icon = user?.getAvatarURL?.(undefined, undefined, false);
@@ -316,6 +332,7 @@ function handleChannelDelete(action: any): void {
 }
 
 function handleAction(action: any): void {
+  trace(`handleAction: ${action?.type}`);
   if (activeAccount !== userId()) { scheduleSync(); return; }
   switch (action?.type) {
     case "GUILD_DELETE":
@@ -341,11 +358,13 @@ function handleAction(action: any): void {
 }
 
 async function syncAndRunChecks(): Promise<void> {
+  trace("syncAndRunChecks: enter");
   const id = userId();
-  if (!id) return;
+  if (!id) { trace("syncAndRunChecks: no id"); return; }
   const previous = readSnapshot(id);
   const next = collectSnapshot();
-  if (!next) return;
+  if (!next) { trace("syncAndRunChecks: no snapshot"); return; }
+  trace("syncAndRunChecks: running offline checks");
 
   if (options.offlineRemovals) {
     if (options.groups) {
@@ -379,6 +398,7 @@ async function syncAndRunChecks(): Promise<void> {
   snapshot = next;
   activeAccount = id;
   writeSnapshot(id, snapshot);
+  trace("syncAndRunChecks: done (baseline set)");
 }
 
 function patchManualActions(): void {
@@ -409,10 +429,12 @@ const plugin: DiscreatePlugin = {
   description: "Notifies you when a friend, group chat, or server removes you.",
   authors: ["Vencord contributors", "Discreate"],
   start(ctx) {
+    trace("=== start ===");
     generation++;
     activeAccount = undefined;
     options = mergeOptions(ctx);
     patchManualActions();
+    trace("start: manual actions patched");
     const dispatcher = Discreate.FluxDispatcher;
     if (dispatcher && typeof dispatcher.dispatch === "function") {
       before(OWNER, dispatcher, "dispatch", (args) => handleAction(args[0]));
