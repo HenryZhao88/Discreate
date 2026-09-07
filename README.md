@@ -1,12 +1,9 @@
 # Discreate
 
-A client mod for the Discord desktop app on **macOS**. It injects a plugin and
-theme runtime into Discord — a handful of built-in plugins, custom CSS themes,
-and enough BetterDiscord compatibility to run many `.plugin.js` files unchanged.
+A client mod for the Discord desktop app on **macOS**. Has enough BetterDiscord compatibility to run many `.plugin.js` files unchanged.
 
 > **Use at your own risk.** Client mods violate Discord's Terms of Service and
-> can get your account actioned — especially plugins that surface hidden content.
-> Everything ships disabled; you turn on what you want.
+> can get your account actioned. Everything ships disabled; you turn on what you want.
 
 ## Install
 
@@ -18,29 +15,7 @@ curl -fsSL https://raw.githubusercontent.com/HenryZhao88/Discreate/main/install.
 
 Rather not touch the Terminal? Download `Discreate-Installer.zip` from the
 [latest release](https://github.com/HenryZhao88/Discreate/releases/latest),
-unzip it, and right-click `install.command` → **Open** (unsigned apps need this
-once). If macOS complains about permissions, use the command above instead.
-
-## Updating
-
-Discreate checks on launch and drops an **Update** button in the panel when
-you're behind — or just re-run the installer. Either way your data is kept.
-
-## Plugins
-
-Open **⌘⇧D → Plugins** to toggle them (all off by default):
-
-| Plugin | What it does |
-| --- | --- |
-| **View Deleted Messages** | Keeps deleted messages visible, tracks edit history, adds a message-log panel. |
-| **Show Hidden Channels** | Reveals channels locked by `VIEW_CHANNEL`, with a lock screen in place of message access. |
-| **Show Hidden Things** | Surfaces moderator-only indicators — timeout affordances, paused invites, and more. |
-| **Read All** | Adds a button above the server list to mark every server as read. |
-| **Member Count** | Shows online, total, and voice counts above the member list. |
-| **Relationship Notifier** | Tells you when a friend, group, or server removes you. |
-| **Force Owner Crown** | Restores the owner crown next to owners when Discord hides it. |
-
-Drop your own BetterDiscord `.plugin.js` files into `~/.discreate/plugins`.
+unzip it, and run `install.command`
 
 ## Themes
 
