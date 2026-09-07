@@ -173,7 +173,7 @@ export function renderUpdatePrompt(
   const h = document.createElement("h2");
   h.textContent = "Update Available";
   const p = document.createElement("p");
-  p.textContent = "A new version of Discreate is available. Updating quits Discord, reinstalls the latest version, and keeps all your settings and data.";
+  p.textContent = "A new version of Discreate is available. Updating closes and relaunches Discord, installs the latest version, and keeps all your settings and data.";
   bodyEl.append(h, p);
 
   const footer = document.createElement("div");

@@ -30,10 +30,29 @@ else
   curl -fsSL "https://raw.githubusercontent.com/$REPO/$BRANCH/install.command" -o "$TARGET" 2>/dev/null && chmod +x "$TARGET" || true
 fi
 
-# 2. Quit-check Discord (inject cannot patch a running client).
-if pgrep -x "Discord" >/dev/null || pgrep -x "Discord PTB" >/dev/null || pgrep -x "Discord Canary" >/dev/null; then
-  die "Discord is running. Quit it fully (Cmd+Q) and run this again."
-fi
+# 2. Close any running Discord so we can patch it, and remember which to
+#    relaunch. (The in-app "Update" button launches this while Discord is open,
+#    so the installer must close it itself rather than refuse.)
+RELAUNCH=""
+for app in "Discord" "Discord PTB" "Discord Canary"; do
+  if pgrep -x "$app" >/dev/null 2>&1; then
+    say "Closing $app to apply the update…"
+    pkill -x "$app" >/dev/null 2>&1 || true
+    RELAUNCH="$RELAUNCH$app|"
+  fi
+done
+# Wait up to ~15s for them to exit.
+for _ in $(seq 1 30); do
+  still=""
+  for app in "Discord" "Discord PTB" "Discord Canary"; do
+    pgrep -x "$app" >/dev/null 2>&1 && still="yes" || true
+  done
+  [ -z "$still" ] && break
+  sleep 0.5
+done
+for app in "Discord" "Discord PTB" "Discord Canary"; do
+  pgrep -x "$app" >/dev/null 2>&1 && die "$app wouldn't close. Quit it fully (Cmd+Q) and run the installer again." || true
+done
 
 # 3. Ensure Node (>= 18). Use system node if present; else download standalone.
 NODE_BIN=""
@@ -109,4 +128,14 @@ say "Injecting into Discord…"
   fs.writeFileSync(p,JSON.stringify({commit:"'"$SHA"'",branch:"'"$BRANCH"'",installedAt:new Date().toISOString()},null,2));
 '
 
-say "Done. Launch Discord — Discreate is installed."
+# 8. Relaunch whatever we closed, so the user lands back in the updated app.
+if [ -n "$RELAUNCH" ]; then
+  OLDIFS=$IFS; IFS='|'
+  for app in $RELAUNCH; do
+    [ -n "$app" ] && open -a "$app" >/dev/null 2>&1 || true
+  done
+  IFS=$OLDIFS
+  say "Done — Discreate updated. Discord is relaunching."
+else
+  say "Done. Launch Discord — Discreate is installed."
+fi
