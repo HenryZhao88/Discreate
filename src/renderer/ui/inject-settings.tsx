@@ -39,6 +39,7 @@ const STYLE_ID = "discreate-modal-styles";
 const ROOT_ID = "discreate-modal-root";
 const PILL_ID = "discreate-pill";
 const OVERLAY_ID = "discreate-overlay";
+const UPDATE_OVERLAY_ID = "discreate-update-overlay";
 let removeShortcut: (() => void) | undefined;
 
 function ensureStyles(): void {
@@ -106,6 +107,28 @@ function ensureStyles(): void {
     .dc-about { color: #b5bac1; line-height: 1.6; }
     .dc-about code { background: #2b2d31; padding: 2px 6px; border-radius: 3px; color: #fff; }
     .dc-update-banner { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; margin-bottom:8px; background:var(--info-fill, #3a4a6b); border-radius:6px; color:#fff; }
+    #${UPDATE_OVERLAY_ID} {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+      z-index: 2147483647; display: flex; align-items: center; justify-content: center;
+      font: 14px/1.4 var(--font-primary, system-ui, sans-serif); color: #fff;
+    }
+    .dc-update-modal {
+      width: min(420px, 90vw); background: #313338; border-radius: 8px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.6); overflow: hidden;
+    }
+    .dc-update-modal-body { padding: 20px 20px 4px; }
+    .dc-update-modal h2 { margin: 0 0 8px; font-size: 18px; font-weight: 700; }
+    .dc-update-modal p { margin: 0; color: #dbdee1; font-size: 14px; line-height: 1.5; }
+    .dc-update-footer {
+      display: flex; justify-content: flex-end; align-items: center; gap: 12px;
+      padding: 16px 20px; margin-top: 16px; background: #2b2d31;
+    }
+    .dc-update-footer .dc-link {
+      background: none; border: none; color: #fff; cursor: pointer;
+      font: 600 14px/1 inherit; padding: 6px 4px;
+    }
+    .dc-update-footer .dc-link:hover { text-decoration: underline; }
+    .dc-update-footer .dc-btn { padding: 10px 16px; font-size: 14px; }
   `;
   document.head.appendChild(s);
 }
@@ -125,6 +148,51 @@ export function renderUpdateBanner(
   btn.addEventListener("click", onUpdate);
   bar.append(msg, btn);
   return bar;
+}
+
+/**
+ * A Discord-style modal shown on launch when an update is available. Self-
+ * dismissing: both buttons remove the overlay; "Update Now" also calls
+ * `onUpdate`. Returns the overlay element for the caller to append; returns
+ * null when no update is available.
+ */
+export function renderUpdatePrompt(
+  status: UpdateStatus,
+  onUpdate: () => void,
+): HTMLElement | null {
+  if (!status.updateAvailable) return null;
+
+  const overlay = document.createElement("div");
+  overlay.id = UPDATE_OVERLAY_ID;
+
+  const modal = document.createElement("div");
+  modal.className = "dc-update-modal";
+
+  const bodyEl = document.createElement("div");
+  bodyEl.className = "dc-update-modal-body";
+  const h = document.createElement("h2");
+  h.textContent = "Update Available";
+  const p = document.createElement("p");
+  p.textContent = "A new version of Discreate is available. Updating quits Discord, reinstalls the latest version, and keeps all your settings and data.";
+  bodyEl.append(h, p);
+
+  const footer = document.createElement("div");
+  footer.className = "dc-update-footer";
+  const later = document.createElement("button");
+  later.className = "dc-link";
+  later.textContent = "Later";
+  later.addEventListener("click", () => overlay.remove());
+  const update = document.createElement("button");
+  update.className = "dc-btn primary";
+  update.textContent = "Update Now";
+  update.addEventListener("click", () => { onUpdate(); overlay.remove(); });
+  footer.append(later, update);
+
+  modal.append(bodyEl, footer);
+  overlay.appendChild(modal);
+  // Clicking the dimmed background dismisses (same as "Later").
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  return overlay;
 }
 
 type Tab = "plugins" | "themes" | "messagelog" | "about";
@@ -181,10 +249,16 @@ export function injectSettings(deps: Deps): void {
     readInstalled: () => native().readInstalled(),
     fetchText: (url) => native().fetchText(url),
   }).then((status) => {
-    const banner = renderUpdateBanner(status, () => {
+    const runUpdate = () => {
       try { native().runInstaller(); } catch { /* installer missing; ignore */ }
-    });
+    };
+    const banner = renderUpdateBanner(status, runUpdate);
     if (banner) card.insertBefore(banner, tabs);
+
+    // Launch-time popup so users who never open Settings still see updates.
+    document.getElementById(UPDATE_OVERLAY_ID)?.remove();
+    const prompt = renderUpdatePrompt(status, runUpdate);
+    if (prompt) document.body.appendChild(prompt);
   }).catch(() => { /* never throw into the UI */ });
 
   root.appendChild(overlay);
