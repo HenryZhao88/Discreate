@@ -244,10 +244,12 @@ function showToast(text: string): void {
 }
 
 function notify(text: string, icon?: string, onClick?: () => void): void {
+  trace(`notify: enter "${text.slice(0, 40)}"`);
   if (options.notices) showNotice(text);
   const BdApi = (window as any).BdApi;
   try {
     if (BdApi?.UI?.showNotification) {
+      trace("notify: calling BdApi.UI.showNotification");
       BdApi.UI.showNotification({
         title: "Relationship Notifier",
         content: text,
@@ -255,12 +257,15 @@ function notify(text: string, icon?: string, onClick?: () => void): void {
         icon,
         onClick,
       });
+      trace("notify: BdApi.UI.showNotification returned");
       return;
     }
   } catch (err) {
     log.warn("BdApi notification failed:", err);
   }
+  trace("notify: showToast fallback");
   showToast(text);
+  trace("notify: exit");
 }
 
 function userDisplayName(user: any, fallback: string): string {
@@ -368,18 +373,23 @@ async function syncAndRunChecks(): Promise<void> {
 
   if (options.offlineRemovals) {
     if (options.groups) {
-      for (const group of missingKeys(previous.groups, next.groups)) {
+      const miss = missingKeys(previous.groups, next.groups);
+      trace(`offline: groups missing=${miss.length}`);
+      for (const group of miss) {
         notify(`You are no longer in the group ${group.name}.`, group.iconURL);
       }
     }
     if (options.servers) {
-      for (const guild of missingKeys(previous.guilds, next.guilds)) {
+      const miss = missingKeys(previous.guilds, next.guilds);
+      trace(`offline: servers missing=${miss.length}`);
+      for (const guild of miss) {
         if (!isGuildUnavailable(guild.id)) {
           notify(`You are no longer in the server ${guild.name}.`, guild.iconURL);
         }
       }
     }
     if (options.friends) {
+      trace(`offline: friends prev=${previous.friends.friends.length}`);
       for (const id of previous.friends.friends) {
         if (!next.friends.friends.includes(id)) {
           void notifyUserRemoval(id, (name) => `You are no longer friends with ${name}.`);
@@ -387,6 +397,7 @@ async function syncAndRunChecks(): Promise<void> {
       }
     }
     if (options.friendRequestCancels) {
+      trace(`offline: requests prev=${previous.friends.requests.length}`);
       for (const id of previous.friends.requests) {
         if (!next.friends.requests.includes(id) && !next.friends.friends.includes(id)) {
           void notifyUserRemoval(id, (name) => `Friend request from ${name} has been revoked.`);
