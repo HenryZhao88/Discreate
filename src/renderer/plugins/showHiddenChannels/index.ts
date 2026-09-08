@@ -1,5 +1,5 @@
 import type { DiscreatePlugin } from "../../api/index.js";
-import { after } from "../../core/patcher.js";
+import { instead } from "../../core/patcher.js";
 import { findStore } from "../../core/webpack.js";
 import { makeLogger } from "../../core/logger.js";
 
@@ -96,18 +96,35 @@ function patchPermissionStore(): void {
   }
   refreshChannelStore();
 
-  // Returning undefined leaves Discord's own answer untouched. We only ever
-  // change it for VIEW_CHANNEL, and Discord asks about every other permission
-  // far more often, so bail before doing any work in the common case.
-  const handle = (args: any[], ret: any): boolean | undefined => {
-    if (!isViewPermission(args[0])) return undefined;
-    return markPermissionResult(args[0], !!ret, findChannelArg(args, 1));
+  let depth = 0;
+  let suppressReveal = 0;
+  const revealedInCall = new Set<string>();
+  const handle = (args: any[], original: (...args: any[]) => any): any => {
+    const viewOnly = isViewPermission(args[0]);
+    depth++;
+    if (!viewOnly) suppressReveal++;
+    try {
+      const ret = original(...args);
+      // Combined permission queries must keep their native result even if
+      // Discord delegates part of the query to a VIEW_CHANNEL-only check.
+      if (!viewOnly || suppressReveal) return ret;
+      const channel = findChannelArg(args, 1);
+      // A nested patched method may already have changed false to true. That
+      // is not evidence that Discord granted access to this channel.
+      if (ret && revealedInCall.has(channel?.id)) return ret;
+      const result = markPermissionResult(args[0], !!ret, channel);
+      if (!ret && result) revealedInCall.add(channel.id);
+      return result;
+    } finally {
+      if (!viewOnly) suppressReveal--;
+      if (--depth === 0) revealedInCall.clear();
+    }
   };
 
-  after(OWNER, PermissionStore, "can", handle);
+  instead(OWNER, PermissionStore, "can", handle);
 
   if (typeof PermissionStore.canWithPartialContext === "function") {
-    after(OWNER, PermissionStore, "canWithPartialContext", handle);
+    instead(OWNER, PermissionStore, "canWithPartialContext", handle);
   }
 }
 
@@ -247,11 +264,24 @@ function chatContainer(): HTMLElement | null {
   );
 }
 
+let positionedContainer: { element: HTMLElement; position: string; priority: string } | null = null;
+
+function restoreChatPosition(): void {
+  if (!positionedContainer) return;
+  const { element, position, priority } = positionedContainer;
+  if (element.style.position === "relative") element.style.setProperty("position", position, priority);
+  positionedContainer = null;
+}
+
 function renderLockScreen(channel: any): void {
   const container = chatContainer();
+  if (positionedContainer?.element !== container) restoreChatPosition();
   if (!container) return;
   const computed = getComputedStyle(container);
-  if (computed.position === "static") container.style.position = "relative";
+  if (computed.position === "static") {
+    positionedContainer = { element: container, position: container.style.position, priority: container.style.getPropertyPriority("position") };
+    container.style.position = "relative";
+  }
 
   let overlay = document.getElementById(OVERLAY_ID) as HTMLElement | null;
   if (!overlay) {
@@ -306,6 +336,7 @@ function updateLockScreen(): void {
     renderLockScreen(channel);
   } else {
     document.getElementById(OVERLAY_ID)?.remove();
+    restoreChatPosition();
   }
 }
 
@@ -348,6 +379,7 @@ const plugin: DiscreatePlugin = {
     if (interval) clearInterval(interval);
     interval = null;
     document.getElementById(OVERLAY_ID)?.remove();
+    restoreChatPosition();
     document.getElementById(STYLE_ID)?.remove();
     for (const old of document.querySelectorAll(`.${HIDDEN_ICON_CLASS}`)) old.remove();
     for (const old of document.querySelectorAll(`.${HIDDEN_LINK_CLASS}`)) old.classList.remove(HIDDEN_LINK_CLASS);

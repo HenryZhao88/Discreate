@@ -64,6 +64,54 @@ describe("DOM observers settle and stop", () => {
     expect(stores.PermissionStore.canManageUser(1n << 40n)).toBe(true);
     expect(stores.PermissionStore.canManageUser((1n << 40n) | 8n)).toBe(false);
   });
+  it.each(["can", "canWithPartialContext"])("keeps hidden status when %s delegates to another patched permission method", async (outer) => {
+    const channel = { id: "2", guild_id: "1", name: "hidden", type: 0 };
+    stores.ChannelStore = { getChannel: () => channel };
+    const inner = outer === "can" ? "canWithPartialContext" : "can";
+    stores.PermissionStore = {
+      [outer](permission: bigint, ch: any) { return this[inner](permission, ch); },
+      [inner]: () => false,
+    };
+    document.body.insertAdjacentHTML("beforeend", '<a href="/channels/1/2">hidden</a><main></main>');
+    hiddenChannels.start(ctx);
+    expect(stores.PermissionStore[outer](1024n, channel)).toBe(true);
+    for (let i = 0; i < 4; i++) await frame();
+    expect(document.querySelector("#discreate-hidden-channel-lock")).not.toBeNull();
+    expect(document.querySelector(".discreate-hidden-channel-icon")).not.toBeNull();
+    expect(frames.size).toBe(0);
+  });
+
+  it("does not reveal a nested VIEW_CHANNEL check inside a combined permission query", () => {
+    const channel = { id: "2", guild_id: "1" };
+    stores.PermissionStore = {
+      can(permission: bigint, ch: any) { return this.canWithPartialContext(1024n, ch); },
+      canWithPartialContext: () => false,
+    };
+    hiddenChannels.start(ctx);
+    expect(stores.PermissionStore.can(1024n | 2048n, channel)).toBe(false);
+  });
+
+  it("restores chat positioning when a hidden channel becomes visible and when disabled", async () => {
+    let allowed = false;
+    const channel = { id: "2", guild_id: "1" };
+    stores.ChannelStore = { getChannel: () => channel };
+    stores.PermissionStore = { can: () => allowed };
+    document.body.insertAdjacentHTML("beforeend", '<main style="position:static"></main>');
+    const main = document.querySelector("main")!;
+    hiddenChannels.start(ctx);
+    await frame();
+    expect(main.style.position).toBe("relative");
+    allowed = true;
+    document.body.appendChild(document.createElement("div"));
+    await frame();
+    expect(main.style.position).toBe("static");
+    allowed = false;
+    document.body.appendChild(document.createElement("div"));
+    await frame();
+    expect(main.style.position).toBe("relative");
+    hiddenChannels.stop(ctx);
+    expect(main.style.position).toBe("static");
+  });
   it.each([memberCount, hiddenThings])("$name does not trigger endless updates from its own mutations", async (plugin) => {
     plugin.start(ctx);
     document.body.appendChild(document.createElement("div"));
