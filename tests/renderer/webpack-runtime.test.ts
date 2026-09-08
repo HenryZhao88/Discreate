@@ -95,6 +95,19 @@ describe("webpack integration boundary", () => {
     })).toEqual({ action: wanted, value: 42 });
   });
 
+  it("uses core error isolation for BetterDiscord instead-hooks", async () => {
+    await setup();
+    const { buildPatcher } = await import("../../src/renderer/api/bd-api");
+    const patcher = buildPatcher();
+    const original = vi.fn(() => 7);
+    const obj = { method: original };
+    patcher.instead("bd-failure", obj, "method", () => { throw new Error("plugin failed"); });
+    try {
+      expect(obj.method()).toBe(7);
+      expect(original).toHaveBeenCalledOnce();
+    } finally { patcher.unpatchAll("bd-failure"); }
+  });
+
   it("passes the actual patched receiver to BetterDiscord callbacks", async () => {
     await setup();
     const { buildPatcher } = await import("../../src/renderer/api/bd-api");

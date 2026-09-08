@@ -268,12 +268,7 @@ export function buildPatcher(): any {
     },
     instead(caller: string, target: any, key: string, fn: (ctx: any, args: any[], orig: Function) => any) {
       return instead(caller, target, key, function (this: any, args, orig) {
-        try {
-          return fn(this, args, orig);
-        } catch (e) {
-          log.error("patcher.instead cb threw:", e);
-          return undefined;
-        }
+        return fn(this, args, orig);
       });
     },
     unpatchAll(caller: string) { unpatchAll(caller); },

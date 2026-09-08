@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { before, after, instead, unpatchAll } from "../../src/renderer/core/patcher";
 
 describe("patcher", () => {
@@ -94,6 +94,31 @@ describe("patcher", () => {
     expect(obj.val()).toBe(101); // good owner's patch still applies
     unpatchAll("bad");
     unpatchAll("good");
+  });
+
+  it("does not repeat host side effects when an instead-hook throws after calling original", () => {
+    const original = vi.fn((n: number) => n * 2);
+    const obj = { val: original };
+    instead("completed", obj, "val", (args, orig) => {
+      orig(args[0] + 1);
+      throw new Error("plugin post-processing failed");
+    });
+    try {
+      expect(obj.val(3)).toBe(8);
+      expect(original).toHaveBeenCalledOnce();
+      expect(original).toHaveBeenCalledWith(4);
+    } finally { unpatchAll("completed"); }
+  });
+
+  it("propagates host errors through instead-hooks without retrying the host", () => {
+    const error = new Error("host failed after a side effect");
+    const original = vi.fn(() => { throw error; });
+    const obj = { val: original };
+    instead("host-error", obj, "val", (_args, orig) => orig());
+    try {
+      expect(() => obj.val()).toThrow(error);
+      expect(original).toHaveBeenCalledOnce();
+    } finally { unpatchAll("host-error"); }
   });
 
 });

@@ -94,10 +94,22 @@ export function instead(
   fn: (args: any[], orig: AnyFn) => any,
 ): Unpatch {
   return patch(owner, target, key, (orig) => function (this: any, ...args: any[]) {
-    try { return fn.call(this, args, orig.bind(this)); }
+    let called = false;
+    let result: any;
+    let failure: { error: unknown } | undefined;
+    const callOriginal = (...forwarded: any[]) => {
+      called = true;
+      failure = undefined;
+      try { return result = orig.apply(this, forwarded); }
+      catch (error) { failure = { error }; throw error; }
+    };
+    try { return fn.call(this, args, callOriginal); }
     catch (err) {
-      log.error(`instead hook for ${owner} on ${key} threw; falling back to original:`, err);
-      return orig.apply(this, args);
+      // Host failures retain their original semantics. Retrying a dispatcher
+      // (or any other stateful host method) can duplicate partial side effects.
+      if (failure) throw failure.error;
+      log.error(`instead hook for ${owner} on ${key} threw:`, err);
+      return called ? result : orig.apply(this, args);
     }
   });
 }
