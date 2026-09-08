@@ -69,4 +69,36 @@ describe("relationship snapshots", () => {
     await Promise.resolve();
     expect(toasts()).toHaveLength(0);
   });
+
+  it("removes visible notifications and their timers when disabled", async () => {
+    plugin.start({ ...ctx, options: { ...ctx.options, notices: true } });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(toasts()).toHaveLength(1);
+    plugin.stop(ctx);
+    expect(toasts()).toHaveLength(0);
+    expect(document.getElementById("discreate-rn-toasts")).toBeNull();
+    expect(document.getElementById("discreate-relationship-notice")).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps checking valid relationships when one saved snapshot record is corrupt", async () => {
+    (window as any).DiscreateNative.readText = () => JSON.stringify({
+      guilds: { corrupt: null, removed: { id: "removed", name: "Former Guild" } },
+      groups: [], friends: { friends: [null, 123], requests: [false] },
+    });
+    plugin.start(ctx);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(toasts()).toEqual(["You are no longer in the server Former Guild."]);
+    expect(writes).toHaveBeenCalledOnce();
+  });
+
+  it("does not report a revoked request when the user blocked or sent a request to that person", async () => {
+    (window as any).DiscreateNative.readText = () => JSON.stringify({
+      friends: { friends: [], requests: ["blocked", "outgoing", "revoked"] },
+    });
+    stores.RelationshipStore = { getRelationships: () => ({ blocked: 2, outgoing: 4 }) };
+    plugin.start(ctx);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(toasts()).toEqual(["Friend request from revoked has been revoked."]);
+  });
 });

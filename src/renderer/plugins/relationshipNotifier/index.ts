@@ -10,7 +10,9 @@ const log = makeLogger("RelationshipNotifier");
 
 const GROUP_DM = 3;
 const FRIEND = 1;
+const BLOCKED = 2;
 const INCOMING_REQUEST = 3;
+const OUTGOING_REQUEST = 4;
 
 interface SimpleGuild {
   id: string;
@@ -66,17 +68,26 @@ let activeAccount: string | undefined;
 let manuallyRemovedFriend: string | undefined;
 let manuallyRemovedGuild: string | undefined;
 let manuallyRemovedGroup: string | undefined;
+const notificationTimers = new Set<ReturnType<typeof setTimeout>>();
 
 export function parseSnapshot(raw: string | null): RelationshipSnapshot {
   if (!raw) return { ...EMPTY_SNAPSHOT, friends: { friends: [], requests: [] } };
   try {
     const data = JSON.parse(raw) as Partial<RelationshipSnapshot>;
+    const records = (value: unknown): Record<string, SimpleGuild> => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+      return Object.fromEntries(Object.entries(value).filter(([id, rec]) =>
+        rec && typeof rec === "object" && rec.id === id && typeof rec.name === "string",
+      ));
+    };
+    const ids = (value: unknown): string[] => Array.isArray(value)
+      ? value.filter((id): id is string => typeof id === "string") : [];
     return {
-      guilds: data.guilds && typeof data.guilds === "object" ? data.guilds : {},
-      groups: data.groups && typeof data.groups === "object" ? data.groups : {},
+      guilds: records(data.guilds),
+      groups: records(data.groups),
       friends: {
-        friends: Array.isArray(data.friends?.friends) ? data.friends!.friends : [],
-        requests: Array.isArray(data.friends?.requests) ? data.friends!.requests : [],
+        friends: ids(data.friends?.friends),
+        requests: ids(data.friends?.requests),
       },
     };
   } catch {
@@ -204,6 +215,14 @@ function isGuildUnavailable(id: string, actionUnavailable?: boolean): boolean {
   catch { return false; }
 }
 
+function removeNotificationAfter(element: HTMLElement, delay: number): void {
+  const timer = setTimeout(() => {
+    notificationTimers.delete(timer);
+    element.remove();
+  }, delay);
+  notificationTimers.add(timer);
+}
+
 function showNotice(text: string): void {
   const id = "discreate-relationship-notice";
   document.getElementById(id)?.remove();
@@ -215,7 +234,7 @@ function showNotice(text: string): void {
     "background:#5865f2;color:white;padding:10px 16px;text-align:center;" +
     "font:600 14px var(--font-primary,system-ui,sans-serif);box-shadow:0 2px 10px rgba(0,0,0,.35)";
   document.body.appendChild(notice);
-  setTimeout(() => notice.remove(), 8000);
+  removeNotificationAfter(notice, 8000);
 }
 
 function toastContainer(): HTMLElement {
@@ -243,7 +262,7 @@ function showToast(text: string): void {
   // Stacked in a flex column so multiple toasts push each other up instead of
   // overlapping at the same fixed position.
   toastContainer().appendChild(toast);
-  setTimeout(() => toast.remove(), 6000);
+  removeNotificationAfter(toast, 6000);
 }
 
 // Notify via our own DOM toast/notice only. Routing through Discord's internal
@@ -375,7 +394,11 @@ async function syncAndRunChecks(): Promise<void> {
       }
     }
     if (options.friendRequestCancels) {
+      const store = findStore("RelationshipStore");
+      const relationships = store?.getMutableRelationships?.() ?? store?.getRelationships?.();
       for (const id of previous.friends.requests) {
+        const type = relationships instanceof Map ? relationships.get(id) : relationships?.[id];
+        if (type === BLOCKED || type === OUTGOING_REQUEST) continue;
         if (!next.friends.requests.includes(id) && !next.friends.friends.includes(id)) {
           void notifyUserRemoval(id, (name) => `Friend request from ${name} has been revoked.`);
         }
@@ -443,7 +466,10 @@ const plugin: DiscreatePlugin = {
     manuallyRemovedFriend = undefined;
     manuallyRemovedGuild = undefined;
     manuallyRemovedGroup = undefined;
+    for (const timer of notificationTimers) clearTimeout(timer);
+    notificationTimers.clear();
     document.getElementById("discreate-relationship-notice")?.remove();
+    document.getElementById("discreate-rn-toasts")?.remove();
     log.log("stopped");
   },
 };
