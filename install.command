@@ -122,6 +122,12 @@ say "Building (esbuild ${ESBUILD_VER})…"
 say "Injecting into Discord…"
 "$NODE_BIN" dist/injector/cli.js inject || die "Injection failed."
 
+# Refresh the next updater from this same commit. Rename over the stable copy
+# so a running bash process can finish reading its original script safely.
+cp "$BUILD/install.command" "$TARGET.tmp"
+chmod +x "$TARGET.tmp"
+mv -f "$TARGET.tmp" "$TARGET"
+
 # 7. Record the installed commit as the update baseline.
 "$NODE_BIN" -e '
   const fs=require("fs"),p=process.env.HOME+"/.discreate/installed.json";
@@ -139,5 +145,3 @@ if [ -n "$RELAUNCH" ]; then
 else
   say "Done. Launch Discord — Discreate is installed."
 fi
-
-# test update 2026-09-07T00:28:38 — remove anytime
