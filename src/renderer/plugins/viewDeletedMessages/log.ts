@@ -126,6 +126,7 @@ export function removeEdit(messageId: string): void {
   const log = readLog();
   log.edits = log.edits.filter((e) => e.messageId !== messageId);
   writeLog(log);
+  editHistory.delete(messageId);
 }
 
 export function clearLog(): void {

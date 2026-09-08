@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "../../src/renderer/plugins/viewDeletedMessages/index";
 import { Discreate } from "../../src/renderer/api/index";
 import { unpatchAll } from "../../src/renderer/core/patcher";
-import { editHistory } from "../../src/renderer/plugins/viewDeletedMessages/log";
+import { editHistory, readLog, removeEdit } from "../../src/renderer/plugins/viewDeletedMessages/log";
 const store = vi.hoisted(() => ({ getName: () => "MessageStore", getMessage: vi.fn() }));
 vi.mock("../../src/renderer/core/webpack", () => ({ findStore: () => store, findByProps: () => store, findByPropsLazy: () => store }));
 vi.mock("../../src/renderer/plugins/viewDeletedMessages/domLayer", () => ({
@@ -46,5 +46,22 @@ describe("message capture", () => {
     ] });
     plugin.start(ctx);
     expect(editHistory.get("kept")).toEqual([{ time: 1, content: "old" }]);
+  });
+  it("does not resurrect locally removed history on the next edit", () => {
+    let raw: string | null = null;
+    Object.assign((window as any).DiscreateNative, {
+      readDeletedLog: () => raw,
+      writeDeletedLog: (value: string) => { raw = value; },
+    });
+    plugin.start(ctx);
+    const update = (content: string) => Discreate.FluxDispatcher.dispatch({
+      type: "MESSAGE_UPDATE", message: { id: "kept", channel_id: "c", content, edited_timestamp: "2026-09-08T00:00:00Z" },
+    });
+    update("first edit");
+    removeEdit("kept");
+    expect(editHistory.has("kept")).toBe(false);
+    store.getMessage.mockReturnValue({ content: "first edit", author: { username: "fixture" } });
+    update("second edit");
+    expect(readLog().edits[0].history.map((h) => h.content)).toEqual(["first edit"]);
   });
 });
