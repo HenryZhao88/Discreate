@@ -696,14 +696,32 @@ export function installBdApi(): any {
     showNotification: UI.showNotification,
   };
 
+  // Both the static API and `new BdApi(name)` are used by BD plugins.
+  const scoped = new Map<string, any>();
+  const bind = (api: any, methods: string[], name: string) => Object.assign({}, api,
+    Object.fromEntries(methods.map((key) => [key, (...args: any[]) => api[key](name, ...args)])),
+  );
+  function BdApi(pluginName?: string): any {
+    if (typeof pluginName !== "string" || !pluginName) return wrapped;
+    if (!scoped.has(pluginName)) {
+      scoped.set(pluginName, new Proxy(Object.assign(Object.create(BdApi.prototype), root, {
+        Data: bind(Data, ["load", "save", "delete"], pluginName),
+        Patcher: bind(Patcher, Object.keys(Patcher), pluginName),
+        DOM: bind(DOM, ["addStyle", "removeStyle"], pluginName),
+        Logger: bind(root.Logger, Object.keys(root.Logger), pluginName),
+      }), apiHandler));
+    }
+    return scoped.get(pluginName);
+  }
   // Wrap with a Proxy so unknown property paths return not-implemented stubs.
-  const wrapped = new Proxy(root, {
+  const apiHandler: ProxyHandler<any> = {
     get(t, key) {
       if (key in t) return (t as any)[key];
       if (typeof key !== "string") return undefined;
       return notImplemented(key);
     },
-  });
+  };
+  const wrapped = new Proxy(Object.assign(BdApi, root), apiHandler);
 
   (window as any).BdApi = wrapped;
   try { (globalThis as any).BdApi = wrapped; } catch { /* ignore */ }

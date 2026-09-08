@@ -320,7 +320,13 @@ export function loadUserPlugins(manager: PluginManager): void {
         }
         let instance: any;
         try {
-          instance = typeof Exported === "function" ? new Exported() : Exported;
+          if (typeof Exported === "function") {
+            // Detect constructability without executing plugin code twice:
+            // arrow factories are callable, whereas classes require `new`.
+            let constructable = false;
+            try { Reflect.construct(Object, [], Exported); constructable = true; } catch { /* factory */ }
+            instance = constructable ? new Exported(meta) : Exported(meta);
+          } else instance = Exported;
         } catch (err) {
           log.error(`BD plugin ${file} constructor threw:`, err);
           appendBdLog(`failed-ctor ${meta.name}: ${(err as any)?.message ?? err}`);
