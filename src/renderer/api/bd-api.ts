@@ -380,14 +380,13 @@ function buildNet(): any {
 function buildUI(): any {
   function findToastMod(): any { return findByProps("showToast") || findByProps("createToast"); }
   function findNotificationMod(): any { return findByProps("showNotification"); }
-  function findConfirmMod(): any { return findByProps("ConfirmModal") || findByProps("ConfirmationModal") || findByProps("openModal", "closeModal"); }
   function findTooltipMod(): any { return findByProps("Tooltip"); }
 
   function showToast(message: string, opts: any = {}): void {
     const m = findToastMod();
     try {
-      if (m?.showToast) { m.showToast(message, opts?.type); return; }
       if (m?.createToast && m?.showToast) { m.showToast(m.createToast(message, opts?.type)); return; }
+      if (m?.showToast) { m.showToast(message, opts?.type); return; }
     } catch (e) { log.warn("showToast failed, falling back:", e); }
     // DOM fallback
     const host = document.createElement("div");
@@ -403,26 +402,32 @@ function buildUI(): any {
     showToast(opts?.title || opts?.content || "Notification", opts);
   }
 
-  function showConfirmationModal(title: string, content: any, opts: any = {}): void {
-    const m = findConfirmMod();
+  function showConfirmationModal(title: string, content: any, opts: any = {}): string | number | void {
+    const modals = findByProps("openModal", "closeModal");
+    const component = findByProps("ConfirmModal")?.ConfirmModal ?? findByProps("ConfirmationModal")?.ConfirmationModal;
+    let settled = false;
+    const settle = (confirmed: boolean) => {
+      if (settled) return;
+      settled = true;
+      (confirmed ? opts?.onConfirm : opts?.onCancel)?.();
+    };
     try {
-      if (m?.openModal && m?.ConfirmModal) {
+      if (modals?.openModal && component) {
         const React = Discreate.React;
-        m.openModal((props: any) => React.createElement(m.ConfirmModal, {
+        return modals.openModal((props: any) => React.createElement(component, {
           ...props,
           header: title,
           confirmText: opts?.confirmText ?? "OK",
           cancelText: opts?.cancelText ?? "Cancel",
-          onConfirm: opts?.onConfirm,
-          onCancel: opts?.onCancel,
-        }, typeof content === "string" ? content : null));
-        return;
+          onConfirm: () => settle(true),
+          onCancel: () => settle(false),
+          onClose: () => { try { settle(false); } finally { props.onClose?.(); } },
+        }, content), { onCloseCallback: () => settle(false) });
       }
     } catch (e) { log.warn("showConfirmationModal native path failed:", e); }
-    // Defer user input to a non-blocking toast + auto-confirm. window.confirm
-    // would freeze the entire renderer and is a no-go inside Discord.
-    showToast(`${title}: ${typeof content === "string" ? content : ""} (auto-confirmed)`, { type: "info" });
-    queueMicrotask(() => opts?.onConfirm?.());
+    // A missing dialog is never consent to the plugin's requested action.
+    showToast(`Could not open confirmation: ${title}`, { type: "error" });
+    settle(false);
   }
 
   function showChangelogModal(opts: any = {}): void {
@@ -451,7 +456,11 @@ function buildUI(): any {
     const root = document.createElement("div");
     root.className = "discreate-bd-settings";
     const settings = spec?.settings ?? [];
-    function emit(item: any, parent: HTMLElement): void {
+    function emit(item: any, parent: HTMLElement, categoryId: string | null = null): void {
+      const change = (value: any) => {
+        item.onChange?.(value);
+        spec?.onChange?.(categoryId, item.id, value);
+      };
       const row = document.createElement("div");
       row.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #2a2c31";
       const label = document.createElement("div");
@@ -462,17 +471,17 @@ function buildUI(): any {
       if (item.type === "switch") {
         const cb = document.createElement("input");
         cb.type = "checkbox"; cb.checked = !!item.value;
-        cb.onchange = () => item.onChange?.(cb.checked);
+        cb.onchange = () => change(cb.checked);
         control = cb;
       } else if (item.type === "text") {
         const inp = document.createElement("input");
         inp.type = "text"; inp.value = item.value ?? "";
-        inp.onchange = () => item.onChange?.(inp.value);
+        inp.onchange = () => change(inp.value);
         control = inp;
       } else if (item.type === "number") {
         const inp = document.createElement("input");
         inp.type = "number"; inp.value = String(item.value ?? 0);
-        inp.onchange = () => item.onChange?.(Number(inp.value));
+        inp.onchange = () => change(Number(inp.value));
         control = inp;
       } else if (item.type === "dropdown") {
         const sel = document.createElement("select");
@@ -482,7 +491,7 @@ function buildUI(): any {
           if (o.value === item.value) opt.selected = true;
           sel.appendChild(opt);
         }
-        sel.onchange = () => item.onChange?.(sel.value);
+        sel.onchange = () => { if (sel.selectedIndex >= 0) change(item.options[sel.selectedIndex].value); };
         control = sel;
       } else if (item.type === "category") {
         const cat = document.createElement("div");
@@ -491,11 +500,14 @@ function buildUI(): any {
         h.textContent = item.name ?? "";
         h.style.cssText = "color:#fff;font-size:14px;margin:8px 0";
         cat.appendChild(h);
-        for (const sub of item.settings ?? []) emit(sub, cat);
+        for (const sub of item.settings ?? []) emit(sub, cat, item.id ?? null);
         parent.appendChild(cat);
         return;
       }
-      if (control) row.appendChild(control);
+      if (control) {
+        (control as HTMLInputElement | HTMLSelectElement).disabled = !!item.disabled;
+        row.appendChild(control);
+      }
       parent.appendChild(row);
     }
     for (const item of settings) emit(item, root);
