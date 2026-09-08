@@ -54,6 +54,19 @@ describe("BdApi.Utils pure helpers", () => {
     expect(hit?.val).toBe(1);
   });
 
+  it("walks React child arrays even when walkable only names props and children", () => {
+    const wanted = { key: "target", props: {} };
+    const tree: any = { props: { children: [{ props: { children: [wanted] } }] } };
+    tree.props.children.push(tree);
+    expect(findInTree(tree, (n: any) => n?.key === "target", { walkable: ["props", "children"] })).toBe(wanted);
+  });
+
+  it("returns the first match in property order and skips throwing getters", () => {
+    const wanted = { target: true, order: 1 };
+    const tree = { get broken() { throw new Error("unavailable"); }, a: wanted, b: { target: true, order: 2 } };
+    expect(findInTree(tree, (n: any) => n?.target)).toBe(wanted);
+  });
+
   it("findInTree returns null when nothing matches", () => {
     expect(findInTree({ a: 1 }, () => false)).toBeNull();
   });

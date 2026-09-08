@@ -46,24 +46,27 @@ function findInTree(
   filter: (n: any) => boolean,
   opts: { walkable?: string[] | null; ignore?: string[] } = {},
 ): any {
-  if (tree == null || typeof tree !== "object") return null;
   const seen = new Set<any>();
   const ignore = new Set(opts.ignore ?? []);
   const stack: any[] = [tree];
   while (stack.length) {
     const node = stack.pop();
-    if (node == null || typeof node !== "object" || seen.has(node)) continue;
-    seen.add(node);
+    if (node == null || seen.has(node)) continue;
+    const traversable = typeof node === "object" || typeof node === "function";
+    if (traversable) seen.add(node);
     try {
       if (filter(node)) return node;
     } catch {
       // skip
     }
-    const keys = opts.walkable && opts.walkable.length > 0 ? opts.walkable : Object.keys(node);
-    for (const k of keys) {
+    if (!traversable) continue;
+    let keys: string[];
+    try { keys = !Array.isArray(node) && opts.walkable ? opts.walkable : Object.keys(node); }
+    catch { continue; }
+    // Push in reverse so the stack visits children in their original order.
+    for (const k of [...keys].reverse()) {
       if (ignore.has(k)) continue;
-      const v = (node as any)[k];
-      if (v && typeof v === "object") stack.push(v);
+      try { stack.push(node[k]); } catch { /* skip throwing getters */ }
     }
   }
   return null;
@@ -288,20 +291,13 @@ function buildData(): any {
   function dataPath(plugin: string): string {
     return `${native().root}/bd-data/${plugin}.json`;
   }
-  function ensureDir(): void {
-    const n = native() as any;
-    // Try to make the dir by writing an empty placeholder if the directory
-    // doesn't already exist; node's writeFileSync without mkdir would fail.
-    // The native bridge doesn't expose mkdir, so we lazily try the write and
-    // swallow errors.
-    void n;
-  }
   function read(plugin: string): Record<string, any> {
     if (cache.has(plugin)) return cache.get(plugin)!;
-    let parsed: Record<string, any> = {};
+    const parsed: Record<string, any> = Object.create(null);
     try {
       const raw = native().readText(dataPath(plugin));
-      if (raw) parsed = JSON.parse(raw);
+      const value = raw ? JSON.parse(raw) : null;
+      if (value && typeof value === "object" && !Array.isArray(value)) Object.assign(parsed, value);
     } catch { /* ignore */ }
     cache.set(plugin, parsed);
     return parsed;
@@ -309,7 +305,6 @@ function buildData(): any {
   function write(plugin: string, data: Record<string, any>): void {
     cache.set(plugin, data);
     try {
-      ensureDir();
       native().writeText(dataPath(plugin), JSON.stringify(data, null, 2));
     } catch (e) {
       log.warn(`Data.save failed for ${plugin}:`, e);
