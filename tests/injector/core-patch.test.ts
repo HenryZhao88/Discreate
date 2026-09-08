@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { patchCore, unpatchCore, isCorePatched, installRuntime } from "../../src/injector/core-patch";
@@ -65,4 +65,26 @@ describe("core-patch", () => {
       expect(existsSync(join(runtime, f))).toBe(true);
     }
   });
+
+  it("keeps the complete old runtime if any new build artifact is missing", () => {
+    const runtime = fakeBuildDir();
+    const build = fakeBuildDir();
+    writeFileSync(join(build, "loader.js"), "new loader");
+    rmSync(join(build, "renderer.js"));
+    expect(() => installRuntime(build, runtime)).toThrow();
+    for (const file of ["loader.js", "preload.js", "renderer.js"]) {
+      expect(readFileSync(join(runtime, file), "utf8")).toBe(`// ${file}`);
+    }
+  });
+
+  it("preserves unrelated runtime files when publishing a successful build", () => {
+    const runtime = fakeBuildDir();
+    const build = fakeBuildDir();
+    writeFileSync(join(runtime, "extra.txt"), "keep");
+    writeFileSync(join(build, "loader.js"), "new loader");
+    installRuntime(build, runtime);
+    expect(readFileSync(join(runtime, "loader.js"), "utf8")).toBe("new loader");
+    expect(readFileSync(join(runtime, "extra.txt"), "utf8")).toBe("keep");
+  });
+
 });

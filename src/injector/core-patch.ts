@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, writeFileSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const MARKER = "discreate-patched";
 const VANILLA = "module.exports = require('./core.asar');\n";
@@ -12,10 +12,25 @@ export function isCorePatched(coreDir: string): boolean {
 
 /** Copy the built runtime bundles into runtimeDir. */
 export function installRuntime(buildDir: string, runtimeDir: string): void {
-  mkdirSync(runtimeDir, { recursive: true });
-  for (const file of ["loader.js", "preload.js", "renderer.js"]) {
-    copyFileSync(join(buildDir, file), join(runtimeDir, file));
-  }
+  const parent = dirname(runtimeDir);
+  mkdirSync(parent, { recursive: true });
+  const staged = mkdtempSync(join(parent, ".discreate-runtime-"));
+  const previous = `${staged}.previous`;
+  let movedPrevious = false;
+  try {
+    // Finish copying before publishing any bundle, preserving unrelated files.
+    if (existsSync(runtimeDir)) cpSync(runtimeDir, staged, { recursive: true });
+    for (const file of ["loader.js", "preload.js", "renderer.js"]) {
+      copyFileSync(join(buildDir, file), join(staged, file));
+    }
+    if (existsSync(runtimeDir)) { renameSync(runtimeDir, previous); movedPrevious = true; }
+    try { renameSync(staged, runtimeDir); }
+    catch (error) {
+      if (movedPrevious) renameSync(previous, runtimeDir);
+      throw error;
+    }
+    if (movedPrevious) rmSync(previous, { recursive: true });
+  } finally { rmSync(staged, { recursive: true, force: true }); }
 }
 
 /** Patch discord_desktop_core/index.js to load Discreate before core.asar. */
