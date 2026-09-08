@@ -18,6 +18,7 @@ import { checkForUpdate, type UpdateStatus } from "../core/updates.js";
 import type { PluginManager } from "../core/plugins.js";
 import type { ThemeManager } from "../core/themes.js";
 import type { SettingsStore } from "../core/settings.js";
+import { version } from "../../../package.json";
 
 const log = makeLogger("settings-ui");
 
@@ -79,6 +80,9 @@ function ensureStyles(): void {
     .dc-tab.active { background: #5865F2; }
     .dc-body { flex: 1; overflow: auto; padding: 16px; }
     .dc-toolbar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+    .dc-install-form { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .dc-install-form input { flex: 1; min-width: 180px; padding: 8px; color: #fff; background: #111214; border: 1px solid #3a3c43; border-radius: 4px; }
+    .dc-install-form [role="status"] { width: 100%; color: #dbdee1; }
     .dc-btn {
       padding: 6px 10px; background: #2b2d31; color: #fff;
       border: 1px solid #1e1f22; border-radius: 4px; cursor: pointer;
@@ -205,6 +209,7 @@ export function injectSettings(deps: Deps): void {
   document.getElementById(PILL_ID)?.remove();
   document.getElementById(OVERLAY_ID)?.remove();
   document.getElementById(ROOT_ID)?.remove();
+  document.getElementById(UPDATE_OVERLAY_ID)?.remove();
 
   const root = document.createElement("div");
   root.id = ROOT_ID;
@@ -249,6 +254,7 @@ export function injectSettings(deps: Deps): void {
     readInstalled: () => native().readInstalled(),
     fetchText: (url) => native().fetchText(url),
   }).then((status) => {
+    if (!root.isConnected) return;
     const runUpdate = () => {
       try { native().runInstaller(); } catch { /* installer missing; ignore */ }
     };
@@ -324,6 +330,48 @@ export function injectSettings(deps: Deps): void {
     return b;
   }
 
+  function showInstallForm(toolbar: HTMLElement, kind: "plugins" | "themes"): void {
+    const existing = body.querySelector<HTMLInputElement>(".dc-install-form input");
+    if (existing) { existing.focus(); return; }
+    const form = document.createElement("form");
+    form.className = "dc-install-form";
+    const input = document.createElement("input");
+    input.type = "url";
+    input.required = true;
+    input.placeholder = kind === "plugins" ? "Plugin URL (.js or .plugin.js)" : "Theme URL (.css)";
+    input.setAttribute("aria-label", input.placeholder);
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.className = "dc-btn primary";
+    submit.textContent = "Install";
+    const cancel = mkBtn("Cancel", () => form.remove());
+    cancel.type = "button";
+    const status = document.createElement("div");
+    status.setAttribute("role", "status");
+    form.append(input, submit, cancel, status);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const url = input.value.trim();
+      if (!url || submit.disabled) return;
+      submit.disabled = true;
+      status.textContent = "Downloading…";
+      try {
+        const n = native();
+        const saved = await n.downloadToFolder(url, kind === "plugins" ? n.pluginsDir : n.themesDir);
+        if (toolbar.parentElement !== body || !form.isConnected) return;
+        renderBody();
+        status.textContent = kind === "plugins"
+          ? `Installed ${saved}. Restart Discord to load it.`
+          : `Installed ${saved}. Enable it in the list.`;
+        body.prepend(status);
+      } catch (error: any) {
+        status.textContent = "Download failed: " + (error?.message ?? error);
+      } finally { submit.disabled = false; }
+    });
+    toolbar.after(form);
+    input.focus();
+  }
+
   function renderPlugins(): void {
     const toolbar = document.createElement("div");
     toolbar.className = "dc-toolbar";
@@ -333,16 +381,7 @@ export function injectSettings(deps: Deps): void {
         try { native().openFolder(native().pluginsDir); }
         catch (e) { log.warn("openFolder failed", e); }
       }),
-      mkBtn("Install from URL…", async () => {
-        const url = window.prompt("Plugin URL (.js or .plugin.js):");
-        if (!url) return;
-        try {
-          const saved = await native().downloadToFolder(url, native().pluginsDir);
-          alert(`Installed ${saved}. Restart Discord to load it.`);
-        } catch (e: any) {
-          alert("Download failed: " + (e?.message ?? e));
-        }
-      }, "primary"),
+      mkBtn("Install from URL…", () => showInstallForm(toolbar, "plugins"), "primary"),
     );
     body.replaceChildren(toolbar);
 
@@ -350,7 +389,7 @@ export function injectSettings(deps: Deps): void {
     if (all.length === 0) {
       const empty = document.createElement("div");
       empty.className = "dc-empty";
-      empty.textContent = "No plugins. Drop *.plugin.js into ~/.discreate/plugins and Refresh.";
+      empty.textContent = "No plugins. Drop *.plugin.js into ~/.discreate/plugins and restart Discord.";
       body.appendChild(empty);
       return;
     }
@@ -393,17 +432,7 @@ export function injectSettings(deps: Deps): void {
         try { native().openFolder(native().themesDir); }
         catch (e) { log.warn("openFolder failed", e); }
       }),
-      mkBtn("Install from URL…", async () => {
-        const url = window.prompt("Theme URL (.css):");
-        if (!url) return;
-        try {
-          const saved = await native().downloadToFolder(url, native().themesDir);
-          alert(`Installed ${saved}. Enable it in the list.`);
-          renderBody();
-        } catch (e: any) {
-          alert("Download failed: " + (e?.message ?? e));
-        }
-      }, "primary"),
+      mkBtn("Install from URL…", () => showInstallForm(toolbar, "themes"), "primary"),
     );
     body.replaceChildren(toolbar);
 
@@ -501,7 +530,7 @@ export function injectSettings(deps: Deps): void {
     const about = document.createElement("div");
     about.className = "dc-about";
     about.innerHTML = `
-      <p><b>Discreate 0.1.0</b> — a Discord client mod for macOS.</p>
+      <p><b>Discreate ${version}</b> — a Discord client mod for macOS.</p>
       <p>Settings live in <code>~/.discreate/</code> and survive Discord reinstalls.
          When Discord updates its modules, click <b>Reinject</b> below.</p>
       <p>Shortcut: <code>Cmd/Ctrl+Shift+D</code> to toggle this panel.</p>
