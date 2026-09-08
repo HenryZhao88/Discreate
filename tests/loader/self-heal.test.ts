@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { selfHealSiblings } from "../../src/loader/self-heal";
@@ -24,6 +24,16 @@ function makeVersionDir(appSupport: string, version: string, opts: { patched?: b
 }
 
 describe("selfHealSiblings", () => {
+  it("isolates an unreadable sibling so boot and other repairs can continue", () => {
+    const appSup = makeAppSupport();
+    const current = makeVersionDir(appSup, "0.0.390", { patched: true });
+    const broken = makeVersionDir(appSup, "0.0.400");
+    rmSync(join(broken, "index.js"));
+    mkdirSync(join(broken, "index.js"));
+    const valid = makeVersionDir(appSup, "0.0.412");
+    expect(selfHealSiblings(current, "/abs/loader.js")).toEqual([valid]);
+    expect(readFileSync(join(valid, "index.js"), "utf8")).toContain("discreate-patched");
+  });
   it("patches an unpatched sibling version dir", () => {
     const appSup = makeAppSupport();
     const current = makeVersionDir(appSup, "0.0.390", { patched: true });

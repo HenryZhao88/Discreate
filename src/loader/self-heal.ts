@@ -28,24 +28,33 @@ export function selfHealSiblings(currentCoreDir: string, loaderPath: string): st
   if (!appSupport || !existsSync(appSupport)) return [];
 
   const patched: string[] = [];
-  for (const entry of readdirSync(appSupport)) {
+  let entries: string[];
+  try { entries = readdirSync(appSupport); }
+  catch (error) { console.warn("[Discreate] could not enumerate sibling installs:", error); return []; }
+  for (const entry of entries) {
     if (!/^(?:app-)?\d+\.\d+\.\d+$/.test(entry)) continue;
     const sibling = resolveCoreUnderModules(join(appSupport, entry, "modules"));
     if (!sibling || sibling === currentCoreDir) continue;
-    const idx = join(sibling, "index.js");
-    if (!existsSync(idx)) continue;
-    const current = readFileSync(idx, "utf8");
-    if (current.includes(MARKER)) continue;
-    const backup = join(sibling, "index.js.discreate-backup");
-    if (!existsSync(backup)) copyFileSync(idx, backup);
-    writeFileSync(
-      idx,
-      `// ${MARKER}\n` +
-        `require(${JSON.stringify(loaderPath)});\n` +
-        `if (global.__discreateSelfHeal) global.__discreateSelfHeal(__dirname);\n` +
-        `module.exports = require('./core.asar');\n`,
-    );
-    patched.push(sibling);
+    try {
+      const idx = join(sibling, "index.js");
+      if (!existsSync(idx)) continue;
+      const current = readFileSync(idx, "utf8");
+      if (current.includes(MARKER)) continue;
+      const backup = join(sibling, "index.js.discreate-backup");
+      if (!existsSync(backup)) copyFileSync(idx, backup);
+      writeFileSync(
+        idx,
+        `// ${MARKER}\n` +
+          `require(${JSON.stringify(loaderPath)});\n` +
+          `if (global.__discreateSelfHeal) global.__discreateSelfHeal(__dirname);\n` +
+          `module.exports = require('./core.asar');\n`,
+      );
+      patched.push(sibling);
+    } catch (error) {
+      // This runs before core.asar starts. An old install's filesystem error
+      // must not prevent the active install from booting or repairing others.
+      console.warn(`[Discreate] could not repair sibling ${sibling}:`, error);
+    }
   }
   return patched;
 }
