@@ -7,6 +7,7 @@ function fixture() {
   const api = { Data: { load: () => null, save: vi.fn() }, Logger: { error: vi.fn() } };
   const BdApi: any = function () { return api; };
   BdApi.React = { createElement: vi.fn() };
+  BdApi.Components = { ErrorBoundary: () => null };
   const Plugin = createAutoTranslate(BdApi);
   const plugin: any = new Plugin({ name: "AutoTranslate" });
   Object.assign(plugin, {
@@ -18,6 +19,26 @@ function fixture() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("AutoTranslate", () => {
+  it("uses live user identity and leaves messages alone until login finishes", () => {
+    const { plugin } = fixture();
+    let currentId: string | undefined;
+    let patch!: (ctx: any, args: any[], ret: any) => void;
+    plugin.UserStore = { getCurrentUser: () => currentId ? { id: currentId } : undefined };
+    plugin.modules = { MessageContent: {}, Parser: {} };
+    plugin.api.Patcher = { after: (_module: any, _key: string, callback: any) => { patch = callback; } };
+    plugin.patch();
+    const message = { id: "1", author: { id: "author" }, content: "bonjour" };
+    const render = () => {
+      const ret = { props: { children: [["bonjour"]] } };
+      patch(null, [{ message }], ret);
+      return ret;
+    };
+    expect(render().props.children).toEqual([["bonjour"]]);
+    currentId = "author";
+    expect(render().props.children).toEqual([["bonjour"]]);
+    currentId = "viewer";
+    expect(render().props.children).toEqual([undefined]);
+  });
   it("deduplicates batch requests and restores mentions, links, and code", async () => {
     const { plugin } = fixture();
     const raw = "bonjour <@123> https://example.test `code`";

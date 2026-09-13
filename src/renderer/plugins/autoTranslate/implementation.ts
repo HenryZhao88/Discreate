@@ -330,8 +330,6 @@ return class AutoTranslate {
     })) {
       if (typeof this[name]?.[method] !== "function") throw new Error(`AutoTranslate: ${name}.${method} unavailable`);
     }
-    this.myId = this.UserStore.getCurrentUser()?.id;
-    if (!this.myId) throw new Error("AutoTranslate: current user unavailable");
     this.active = true;
     this.visible = new Set();
     this.observed = new WeakMap();
@@ -444,7 +442,10 @@ return class AutoTranslate {
       if (!this.active || !msg?.id) return;
       if (props.className?.includes("repliedTextContent")) return;
       if (!Array.isArray(ret?.props?.children)) return;
-      if (unwanted(msg, this.myId)) return;
+      // Gateway identify can finish after plugin startup. Read live user state
+      // when rendering rather than rejecting startup or retaining an empty ID.
+      const myId = this.UserStore.getCurrentUser()?.id;
+      if (!myId || unwanted(msg, myId)) return;
       const kids = ret.props.children;
       const i = kids.findIndex((c) => Array.isArray(c));
       if (i < 0) return;

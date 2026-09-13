@@ -1,5 +1,6 @@
 // src/renderer/core/index.ts
-import { initWebpack, findByProps, waitFor, byProps, forceLoadAllChunks, findFluxDispatcher, waitForMainWebpack } from "./webpack.js";
+import { initWebpack, waitFor, byProps, forceLoadAllChunks, findFluxDispatcher, waitForMainWebpack } from "./webpack.js";
+import { resolveReactDOM } from "./react-dom.js";
 import { SettingsStore, nativeBackend } from "./settings.js";
 import { ThemeManager } from "./themes.js";
 import { PluginManager, loadUserPlugins } from "./plugins.js";
@@ -48,12 +49,16 @@ async function boot(): Promise<void> {
     // entry-bundle modules (~100) are in the cache and almost every Flux store
     // looks "missing".
     forceLoadAllChunks().catch((err) => log.warn("chunk loading failed:", err)).then(() => {
-      // ReactDOM 18 ships `createRoot` in `react-dom/client` and the legacy
-      // `render` in `react-dom`; finders for the union miss. Pull both and
-      // present a merged object.
-      const rdomClient = findByProps("createRoot", "hydrateRoot");
-      const rdomLegacy = findByProps("render", "unmountComponentAtNode");
-      if (rdomClient || rdomLegacy) Discreate.ReactDOM = { ...rdomClient, ...rdomLegacy };
+      // Discord's React 19 client exports only createRoot. Property-only
+      // lookups can also select localization objects or compatibility proxies.
+      Discreate.ReactDOM = undefined;
+      try { Discreate.ReactDOM = resolveReactDOM(React.version); }
+      catch (error) { log.error("ReactDOM discovery failed:", error); }
+      log.log("ReactDOM provider", JSON.stringify({
+        reactVersion: React.version,
+        createRoot: typeof Discreate.ReactDOM?.createRoot,
+        render: typeof Discreate.ReactDOM?.render,
+      }));
 
       // Locate the live FluxDispatcher *instance* via a Flux store's
       // `_dispatcher` back-reference.
