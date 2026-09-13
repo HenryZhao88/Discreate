@@ -1,5 +1,13 @@
 // src/renderer/core/webpack.ts
+import { isExcludedModule } from "./module-exclusions.js";
 export type ModuleFilter = (mod: any) => boolean;
+
+// Compatibility API proxies are sometimes re-exported by host modules. Their
+// arbitrary property stubs must never be mistaken for Discord implementations.
+function excluded(mod: any): boolean {
+  return mod != null && (typeof mod === "object" || typeof mod === "function") &&
+    (isExcludedModule(mod) || isIntlMessagesProxy(mod));
+}
 
 /**
  * Discord's `IntlMessagesProxy` is a JS Proxy that responds to ANY property
@@ -21,8 +29,8 @@ function isIntlMessagesProxy(mod: any): boolean {
 export function byProps(...props: string[]): ModuleFilter {
   return (mod) =>
     mod != null &&
-    !isIntlMessagesProxy(mod) &&
-    props.every((p) => mod[p] !== undefined);
+    !excluded(mod) &&
+    props.every((p) => p in Object(mod) && mod[p] !== undefined);
 }
 
 /**
@@ -79,7 +87,7 @@ export function searchModules(modules: any[], filter: ModuleFilter): any {
  * we surface each individual export value as a candidate too.
  */
 export function* exportCandidates(exports: any): Generator<any> {
-  if (exports == null) return;
+  if (exports == null || excluded(exports)) return;
   yield exports;
   if (typeof exports !== "object" && typeof exports !== "function") return;
   let keys: string[];
@@ -96,7 +104,7 @@ export function* exportCandidates(exports: any): Generator<any> {
       // a hostile module can expose a throwing getter; skip it
       continue;
     }
-    if (v != null && (typeof v === "object" || typeof v === "function")) yield v;
+    if (v != null && (typeof v === "object" || typeof v === "function") && !excluded(v)) yield v;
   }
 }
 
@@ -173,12 +181,34 @@ function registerWebpackRequire(require: any): void {
   // is pure waste, and enough of it to block the renderer for a minute.
   if (webpackRequires.has(require)) return;
   webpackRequires.add(require);
+  // Main-bundle factories can be registered before our chunk.push hook. Watch
+  // their normal execution too, so waiters resolve when those exports load.
+  wrapModuleFactories(require.m);
   selectBestWebpackRequire();
   // `m`, `c`, and `p` are assigned at different points during bootstrap.
   // Re-score after those assignments have had a chance to complete. Scheduled
   // once per newly-seen runtime, which is all the re-scoring needs.
   for (const delay of [0, 50, 250, 1000]) {
     setTimeout(selectBestWebpackRequire, delay);
+  }
+}
+
+function wrapModuleFactories(modules: any): void {
+  if (!modules) return;
+  for (const id of Object.keys(modules)) {
+    const original = modules[id];
+    if (typeof original !== "function" || original[ORIGINAL_FACTORY]) continue;
+    const wrapped = function (this: any, mod: any, mExports: any, require: any) {
+      registerWebpackRequire(require);
+      const result = original.call(this, mod, mExports, require);
+      if (require === wpRequire) {
+        if (mod?.exports) collect(mod.exports);
+        if (mExports && mExports !== mod?.exports) collect(mExports);
+      }
+      return result;
+    };
+    Object.defineProperty(wrapped, ORIGINAL_FACTORY, { value: original });
+    modules[id] = wrapped;
   }
 }
 
@@ -393,26 +423,18 @@ export function initWebpack(): void {
   const key = "webpackChunkdiscord_app";
   const chunk: any[] = (window as any)[key] ?? ((window as any)[key] = []);
   const originalPush = chunk.push.bind(chunk);
-  chunk.push = (item: any) => {
-    const modules = item[1];
-    if (modules) {
-      for (const id of Object.keys(modules)) {
-        const original = modules[id]?.[ORIGINAL_FACTORY] ?? modules[id];
-        const wrapped = function (this: any, mod: any, mExports: any, require: any) {
-          registerWebpackRequire(require);
-          const result = original.call(this, mod, mExports, require);
-          if (require === wpRequire) {
-            if (mod?.exports) collect(mod.exports);
-            if (mExports && mExports !== mod?.exports) collect(mExports);
-          }
-          return result;
-        };
-        Object.defineProperty(wrapped, ORIGINAL_FACTORY, { value: original });
-        modules[id] = wrapped;
-      }
-    }
-    return originalPush(item);
+  // Other webpack runtimes replace this shared array's push during startup.
+  // Keep observation at its outer boundary across those replacements.
+  const observePush = (push: any) => function (this: any, item: any) {
+    wrapModuleFactories(item[1]);
+    return push.call(this, item);
   };
+  let observedPush = observePush(chunk.push);
+  Object.defineProperty(chunk, "push", {
+    configurable: true,
+    get: () => observedPush,
+    set: (push) => { observedPush = observePush(push); },
+  });
 
   // Capture the runtime immediately. Waiting for a later module factory to
   // execute is unreliable once Discord's initial chunks have already loaded,
@@ -464,7 +486,7 @@ export function findByProps(...props: string[]): any {
   // class modules) over modules that just happen to share the prop names (most
   // often Discord's intl messages proxy, whose values are function resolvers).
   const stringy = find((mod) =>
-    mod != null && props.every((p) => typeof mod[p] === "string"),
+    byProps(...props)(mod) && props.every((p) => typeof mod[p] === "string"),
   );
   if (stringy !== undefined) return stringy;
   return find(byProps(...props));

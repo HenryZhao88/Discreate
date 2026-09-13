@@ -25,6 +25,39 @@ async function setup() {
 }
 
 describe("webpack integration boundary", () => {
+  it("keeps module observation when another runtime replaces the shared chunk loader", async () => {
+    const { wp, req, chunk } = await setup();
+    const replacement = vi.fn(() => 7);
+    chunk.push = replacement as any;
+    const callback = vi.fn();
+    wp.waitFor(wp.byProps("replacementLoaded"), callback);
+    const module = { replacementLoaded: true };
+    const factories = { a: (mod: any) => { mod.exports = module; } };
+    const item = [[1], factories];
+    expect(chunk.push(item)).toBe(7);
+    expect(replacement).toHaveBeenCalledWith(item);
+    (factories.a as any)({}, {}, req);
+    expect(callback).toHaveBeenCalledWith(module);
+  });
+  it("resolves waiters when a previously registered main-bundle factory executes later", async () => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    const wp = await import("../../src/renderer/core/webpack");
+    const module = { lateMain: true };
+    const original = function (this: any, mod: any) { mod.exports = { Z: module }; return this; };
+    const req: any = () => undefined;
+    req.p = "/assets/"; req.c = {}; req.m = { main: original };
+    const chunk: any[] = [];
+    chunk.push = ((item: any) => { item[2]?.(req); return 1; }) as any;
+    vi.stubGlobal("window", { webpackChunkdiscord_app: chunk });
+    wp.initWebpack();
+    const callback = vi.fn();
+    wp.waitFor(wp.byProps("lateMain"), callback);
+    const receiver = {};
+    expect(req.m.main.call(receiver, {}, {}, req)).toBe(receiver);
+    expect(callback).toHaveBeenCalledWith(module);
+    expect(wp.getWebpackFactorySource(req.m.main)).toBe(original.toString());
+  });
   it("contains synchronous chunk errors and yields between factory batches", async () => {
     const { wp, req } = await setup();
     req.m = Object.fromEntries(Array.from({ length: 1001 }, (_, id) => [id, () => {}]));

@@ -11,6 +11,8 @@ import { find, findAll, findStore, waitFor, findByProps, findByPropsLazy, findBy
 import { before, after, instead, unpatchAll } from "../core/patcher.js";
 import { native } from "../core/paths.js";
 import { makeLogger } from "../core/logger.js";
+import { excludeModuleFromSearch } from "../core/module-exclusions.js";
+import { createMenuPatcher } from "../core/context-menu.js";
 
 const log = makeLogger("BdApi");
 
@@ -24,7 +26,7 @@ function notImplemented(path: string): any {
     log.warn(`not implemented: ${path}`);
     return undefined;
   };
-  return new Proxy(fn, {
+  const stub = new Proxy(fn, {
     get(_t, key) {
       if (key === Symbol.toPrimitive) return () => `[BdApi:${path}]`;
       if (typeof key !== "string") return undefined;
@@ -35,6 +37,8 @@ function notImplemented(path: string): any {
       return undefined;
     },
   });
+  excludeModuleFromSearch(stub);
+  return stub;
 }
 
 // ---------------------------------------------------------------------------
@@ -560,41 +564,21 @@ function buildUI(): any {
 // ---------------------------------------------------------------------------
 
 function buildContextMenu(): any {
-  const callbacks = new Map<string, Set<(ret: any, props: any) => any>>();
-  let patched = false;
-
-  function ensurePatched(): void {
-    if (patched) return;
-    const m = findByProps("openContextMenu", "closeContextMenu");
-    if (!m) return;
-    after("discreate:bd-ctxmenu", m, "openContextMenu", (args) => {
-      // BD's patch fires when the menu's React tree renders; we don't fully
-      // emulate that. We can at least invoke registered callbacks with the
-      // event's render output if accessible.
-      try {
-        const props = args?.[1];
-        if (!props) return;
-        // Each navId callback gets the tree to mutate; we pass through.
-        for (const [navId, cbs] of callbacks) {
-          for (const cb of cbs) {
-            try { cb({ navId }, props); } catch (e) { log.warn(`ctxmenu cb ${navId} threw:`, e); }
-          }
-        }
-      } catch { /* ignore */ }
-    });
-    patched = true;
-  }
+  const patcher = createMenuPatcher(Discreate.React, Discreate.FluxDispatcher, (error) => log.warn("context-menu callback failed:", error));
+  const removals = new Map<any, Map<string, () => void>>();
 
   return {
     patch(navId: string, cb: (ret: any, props: any) => any) {
-      ensurePatched();
-      let set = callbacks.get(navId);
-      if (!set) { set = new Set(); callbacks.set(navId, set); }
-      set.add(cb);
-      return () => set!.delete(cb);
+      let byId = removals.get(cb);
+      if (!byId) removals.set(cb, (byId = new Map()));
+      if (byId.has(navId)) return byId.get(navId);
+      const remove = patcher.patch(navId, cb);
+      const cleanup = () => { remove(); byId!.delete(navId); if (!byId!.size) removals.delete(cb); };
+      byId.set(navId, cleanup);
+      return cleanup;
     },
     unpatch(navId: string, cb: any) {
-      callbacks.get(navId)?.delete(cb);
+      removals.get(cb)?.get(navId)?.();
     },
     buildMenu(items: any): any[] { return Array.isArray(items) ? items : []; },
     buildMenuChildren(items: any): any[] { return Array.isArray(items) ? items : []; },
@@ -769,6 +753,7 @@ export function installBdApi(): any {
         Logger: bind(root.Logger, Object.keys(root.Logger), pluginName),
       }), apiHandler));
     }
+    excludeModuleFromSearch(scoped.get(pluginName));
     return scoped.get(pluginName);
   }
   // Wrap with a Proxy so unknown property paths return not-implemented stubs.
@@ -780,6 +765,7 @@ export function installBdApi(): any {
     },
   };
   const wrapped = new Proxy(Object.assign(BdApi, root), apiHandler);
+  excludeModuleFromSearch(wrapped);
 
   (window as any).BdApi = wrapped;
   try { (globalThis as any).BdApi = wrapped; } catch { /* ignore */ }

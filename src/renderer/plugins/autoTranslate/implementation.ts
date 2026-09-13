@@ -1,5 +1,7 @@
 // @ts-nocheck
 // Adapted from Snues AutoTranslate 0.3.2; the original attribution is below.
+// Favorites, original display, and translation previews inspired by DevilBro's Translator.
+import { defaultLanguages, languageOptions } from "./languages.js";
 /**
  * @name AutoTranslate
  * @author Snues
@@ -147,11 +149,69 @@ function Translated({ msg, original, extras, plugin }) {
   }, [msg]);
   const t = plugin.cache.get(id);
   const ready = t && t.raw === (msg.content || "");
-  const content = ready ? plugin.render(t, extras) : [original, ...extras];
+  const content = ready ? plugin.render(t, extras, plugin.originals.has(id)) : [original, ...extras];
   return h("span", { ref, style: { display: "contents" } }, content);
 }
 
+function TranslationPreview({ plugin }) {
+  const [text, setText] = React.useState("");
+  const [source, setSource] = React.useState(plugin.settings.previewSource || "auto");
+  const [target, setTarget] = React.useState(plugin.settings.previewTarget || plugin.targetLang);
+  const [result, setResult] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [status, setStatus] = React.useState("");
+  const requestId = React.useRef(0);
+  React.useEffect(() => () => { requestId.current++; }, []);
+  const clear = () => { requestId.current++; setResult(null); setBusy(false); setStatus(""); };
+  const choices = languageOptions(plugin.langNames, plugin.settings.favorites, plugin.targetLang);
+  const pickSource = (code) => { clear(); setSource(code); plugin.mutate({ previewSource: code }); };
+  const pickTarget = (code) => { clear(); setTarget(code); plugin.mutate({ previewTarget: code }); };
+  const swap = () => {
+    const nextTarget = source === "auto" ? result?.src : source;
+    if (!nextTarget || !plugin.langNames[nextTarget]) { setStatus("Translate once to detect the input language before swapping."); return; }
+    const nextSource = target;
+    clear(); setSource(nextSource); setTarget(nextTarget);
+    plugin.mutate({ previewSource: nextSource, previewTarget: nextTarget });
+  };
+  const translate = async () => {
+    const id = ++requestId.current;
+    setBusy(true); setStatus("Translating…"); setResult(null);
+    try {
+      const translation = await plugin.preview(text, source, target);
+      if (requestId.current !== id) return;
+      setResult(translation); setStatus("");
+    } catch (error) { if (requestId.current === id) setStatus(error.message); }
+    finally { if (requestId.current === id) setBusy(false); }
+  };
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(result.text); setStatus("Copied."); }
+    catch { setStatus("Could not copy. Select the translation and copy it manually."); }
+  };
+  return h("div", { className: "at-card at-preview" },
+    h("span", { className: "at-title" }, "Translate text"),
+    h("span", { className: "at-hint" }, "Preview a translated draft or paste selected text. Copy the result when ready."),
+    h("div", { className: "at-preview-actions" },
+      h("label", null, "Input language", h(BdApi.Components.DropdownInput, { value: source, options: [{ value: "auto", label: "Detect language" }, ...choices], onChange: pickSource })),
+      h("button", { className: "dc-btn", type: "button", onClick: swap, disabled: busy, "aria-label": "Swap input and output languages" }, "⇄ Swap"),
+      h("label", null, "Output language", h(BdApi.Components.DropdownInput, { value: target, options: choices, onChange: pickTarget }))),
+    h("label", null, "Text to translate", h("textarea", { value: text, placeholder: "Type or paste text here…", onChange: (event) => { clear(); setText(event.target.value); } })),
+    h("div", { className: "at-preview-actions" },
+      h("button", { className: "dc-btn primary", type: "button", disabled: busy || !text.trim(), onClick: translate }, busy ? "Translating…" : "Translate"),
+      h("button", { className: "dc-btn", type: "button", disabled: !result || busy, onClick: copy }, "Copy translation")),
+    result && h("div", null,
+      h("div", { className: "at-hint" }, `${plugin.langNames[result.src] || result.src} → ${plugin.langNames[result.target] || result.target}`),
+      h("div", { className: "at-preview-result", role: "region", "aria-label": "Translation", tabIndex: 0 }, result.text)),
+    h("div", { className: "at-hint", role: "status" }, status));
+}
+
 const CSS = `
+      .at-watermark { font-size: 12px; line-height: 1; color: #fff !important; font-weight: 600; }
+      .at-outer[data-show-original] .at-orig { grid-area: 2 / 1; margin-top: 6px; padding-left: 10px; border-left: 3px solid var(--border-muted, #555); }
+      .at-preview { display: grid; gap: 10px; }
+      .at-preview label { display: grid; gap: 5px; }
+      .at-preview textarea { width: 100%; box-sizing: border-box; min-height: 90px; resize: vertical; padding: 10px; border: 1px solid var(--border-muted, #555); border-radius: 5px; color: var(--text-normal, #fff); background: var(--background-secondary, #2b2d31); font: inherit; }
+      .at-preview-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+      .at-preview-result { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; border-radius: 5px; background: var(--background-secondary, #2b2d31); }
       .at-outer {
         display: grid;
         grid-template-columns: minmax(0, 1fr);
@@ -161,9 +221,6 @@ const CSS = `
         grid-area: 1 / 1;
         min-width: 0;
       }
-      .at-orig { visibility: hidden; }
-      [id^="chat-messages-"]:hover .at-orig { visibility: visible; }
-      [id^="chat-messages-"]:hover .at-trans { visibility: hidden; }
       .at-tag {
         display: inline-flex;
         align-items: center;
@@ -300,10 +357,11 @@ return class AutoTranslate {
     this.skipped = new Map();
     this.controllers = new Set();
     this.subs = new Map();
+    this.originals = new Set();
     this.active = this.paused = this.busy = false;
     this.backoff = 0;
     this.label = null;
-    this.langNames = {};
+    this.langNames = { ...defaultLanguages };
     const saved = this.api.Data.load("settings");
     this.settings = {
       skipLangs: saved?.skipLangs || [],
@@ -312,6 +370,11 @@ return class AutoTranslate {
       dms: saved?.dms ?? false,
       disabledGuilds: saved?.disabledGuilds || [],
       seen: saved?.seen ?? false,
+      favorites: Array.isArray(saved?.favorites) ? saved.favorites.filter((c) => typeof c === "string") : [],
+      showOriginal: saved?.showOriginal ?? false,
+      protectedPrefixes: Array.isArray(saved?.protectedPrefixes) ? saved.protectedPrefixes.filter((p) => typeof p === "string" && p.length) : ["!"],
+      previewSource: saved?.previewSource || "auto",
+      previewTarget: saved?.previewTarget || null,
     };
   }
 
@@ -351,7 +414,7 @@ return class AutoTranslate {
     this.wait = new AbortController();
     BdApi.Webpack.waitForModule(
       (e) => {
-        const s = e?.type?.toString();
+        const s = typeof e?.type === "function" ? Function.prototype.toString.call(e.type) : "";
         return (
           s?.includes("SEND_FAILED") && s.includes("contentRef") && e.compare
         );
@@ -361,14 +424,13 @@ return class AutoTranslate {
       if (!this.active || !MessageContent) return;
       const W = BdApi.Webpack;
       const Parser = W.getModule(W.Filters.byKeys("parse", "parseTopic"));
-      const styles = W.getModule(
-        (m) => m?.edited && m?.messageContent && m?.contents,
-      );
-      if (!Parser || !styles) {
-        this.api.Logger.error("Parser or styles module missing");
+      if (typeof Parser?.parse !== "function") {
+        this.api.Logger.error("Message parser module missing");
         return;
       }
-      this.edited = styles.edited;
+      // Discord now mangles CSS export keys. The watermark owns its style and
+      // must not prevent the message integration from initializing.
+      this.edited = "at-watermark";
       this.GuildIcon = W.getModule(
         (m) => {
           if (typeof m !== "function") return false;
@@ -397,6 +459,8 @@ return class AutoTranslate {
 
   stop() {
     this.active = false;
+    this.removeMessageMenu?.();
+    this.removeMessageMenu = null;
     this.wait?.abort();
     for (const c of this.controllers) c.abort();
     this.controllers.clear();
@@ -422,13 +486,15 @@ return class AutoTranslate {
     this.generation = (this.generation || 0) + 1;
     for (const c of this.controllers) c.abort();
     this.cache.clear();
+    this.originals.clear();
     this.queue = [];
     this.retries.clear();
     this.backoff = 0;
     this.pending.clear();
     this.skipped.clear();
     this.label = null;
-    this.langNames = {};
+    this.langNames = { ...defaultLanguages };
+    this.languagesRequestedFor = null;
   }
 
   patch() {
@@ -436,6 +502,7 @@ return class AutoTranslate {
     this.patched = true;
     const { MessageContent, Parser } = this.modules;
     this.parser = Parser;
+    this.removeMessageMenu = BdApi.ContextMenu.patch("message", (tree, props) => this.messageMenu(tree, props));
 
     this.api.Patcher.after(MessageContent, "type", (_, [props], ret) => {
       const msg = props?.message;
@@ -465,6 +532,44 @@ return class AutoTranslate {
         ),
       ];
     });
+  }
+
+  messageMenu(tree, props) {
+    const msg = props?.message;
+    const translation = msg && this.cache.get(msg.id);
+    if (!this.active || !translation || translation.raw !== (msg.content || "")) return tree;
+    const original = this.originals.has(msg.id);
+    const id = "autotranslate-show-original";
+    let inserted = false;
+    const inject = (node) => {
+      if (Array.isArray(node)) {
+        const children = node.map(inject);
+        const i = children.findIndex((child) => child?.props?.id === "copy-text");
+        if (!inserted && i >= 0) {
+          // Use Discord's own item type from this menu, preserving its native
+          // keyboard navigation, focus styles, and menu-closing behavior.
+          children.splice(i + 1, 0, h(children[i].type, {
+            id, key: id, label: original ? "Show translation" : "Show original",
+            action: () => this.toggleOriginal(msg.id),
+          }));
+          inserted = true;
+        }
+        return children;
+      }
+      if (!node?.props?.children) return node;
+      return React.cloneElement(node, { children: inject(node.props.children) });
+    };
+    return inject(tree);
+  }
+
+  toggleOriginal(id) {
+    if (!this.cache.has(id)) return;
+    if (this.originals.has(id)) this.originals.delete(id);
+    else {
+      this.originals.add(id);
+      while (this.originals.size > 1000) this.originals.delete(this.originals.values().next().value);
+    }
+    this.notify(id);
   }
 
   consider(msg) {
@@ -556,7 +661,7 @@ return class AutoTranslate {
     return !this.settings.disabledGuilds.includes(c.guild_id);
   }
 
-  render(t, extras = []) {
+  render(t, extras = [], originalOnly = false) {
     if (!t.parsed) {
       t.parsed = {
         text: this.parser.parse(t.text),
@@ -572,7 +677,7 @@ return class AutoTranslate {
         "span",
         {
           className: this.edited,
-          style: { color: "var(--chat-text-muted)" },
+          style: { color: "#fff" },
         },
         " (",
         txt,
@@ -584,22 +689,23 @@ return class AutoTranslate {
           ? React.cloneElement(el, { key: `at-${pfx}-${el.key || i}` })
           : el,
       );
+    if (originalOnly) return h("span", { className: "at-outer", "data-original-only": "" },
+      h("span", { className: "at-orig" }, p.raw, tag(`original · ${p.srcLabel}`), ...clone("o")));
     return h(
       "span",
-      { className: "at-outer" },
+      { className: "at-outer", ...(this.settings.showOriginal && { "data-show-original": "" }) },
       h(
         "span",
         { className: "at-trans" },
         p.text,
-        tag(this.label || "translated"),
+        tag(`${this.label || "translated"} · ${p.srcLabel}`),
         ...clone("t"),
       ),
-      h(
+      this.settings.showOriginal && h(
         "span",
         { className: "at-orig" },
         p.raw,
-        tag(p.srcLabel),
-        ...clone("o"),
+        tag(`original · ${p.srcLabel}`),
       ),
     );
   }
@@ -719,18 +825,18 @@ return class AutoTranslate {
     }
   }
 
-  async translate(texts, target) {
+  async translate(texts, target, source = "auto") {
     if (!this.active) return null;
     let a, err;
     try {
-      a = await this.translatePa(texts, target);
+      a = await this.translatePa(texts, target, source);
     } catch (e) {
       err = e;
     }
     if (a?.results) return a;
     let b;
     try {
-      b = await this.translateGtx(texts, target);
+      b = await this.translateGtx(texts, target, source);
     } catch (e) {
       err ??= e;
     }
@@ -761,7 +867,7 @@ return class AutoTranslate {
     return { rateLimited: true, retryAfter: ra ? parseInt(ra, 10) : null };
   }
 
-  async translatePa(texts, target) {
+  async translatePa(texts, target, source = "auto") {
     const html = texts.map((t) =>
       t
         .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
@@ -777,7 +883,7 @@ return class AutoTranslate {
           "Content-Type": "application/json+protobuf",
           "X-Goog-API-Key": "AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520",
         },
-        body: JSON.stringify([[html, "auto", target], "te_lib"]),
+        body: JSON.stringify([[html, source, target], "te_lib"]),
       },
     );
     const limited = this.rateLimit(resp);
@@ -805,11 +911,11 @@ return class AutoTranslate {
     };
   }
 
-  async translateGtx(texts, target) {
+  async translateGtx(texts, target, source = "auto") {
     const query = new URLSearchParams({
       client: "gtx",
       dt: "t",
-      sl: "auto",
+      sl: source,
       tl: target,
       ie: "UTF-8",
       oe: "UTF-8",
@@ -851,7 +957,7 @@ return class AutoTranslate {
   async prepLang() {
     const target = this.targetLang;
     const labelNeeded = !this.label;
-    const langsNeeded = !Object.keys(this.langNames).length;
+    const langsNeeded = this.languagesRequestedFor !== target;
     if (!labelNeeded && !langsNeeded) return;
 
     if (labelNeeded) {
@@ -868,6 +974,7 @@ return class AutoTranslate {
     }
 
     if (!langsNeeded) return;
+    this.languagesRequestedFor = target;
     try {
       const r = await this.req(
         `https://translate.googleapis.com/translate_a/l?client=gtx&hl=${encodeURIComponent(target)}`,
@@ -877,7 +984,9 @@ return class AutoTranslate {
       if (limited) return this.tripPause(limited.retryAfter);
       if (!r.ok) return;
       const body = await r.json();
-      this.langNames = body.tl || body.sl || {};
+      const names = body.tl || body.sl || {};
+      this.langNames = { ...defaultLanguages, ...Object.fromEntries(Object.entries(names).filter(([code, name]) => code !== "auto" && typeof name === "string")) };
+      for (const translation of this.cache.values()) translation.parsed = null;
       this.refreshPanel?.();
     } catch (e) {
       if (this.active) this.api.Logger.error(e);
@@ -956,6 +1065,42 @@ return class AutoTranslate {
     this.mutate({ disabledGuilds: list }, this.apply);
   }
 
+  setFavorites(list) {
+    this.mutate({ favorites: [...new Set(list)].filter((c) => this.langNames[c]) });
+    this.refreshPanel?.();
+  }
+
+  setShowOriginal(value) {
+    this.mutate({ showOriginal: value });
+    this.refresh();
+  }
+
+  setProtectedPrefixes(value) {
+    this.mutate({ protectedPrefixes: [...new Set(value.split(",").map((p) => p.trim()).filter(Boolean))] });
+  }
+
+  async preview(text, source, target) {
+    if (!this.active) throw new Error("Enable AutoTranslate to translate text.");
+    if (!text.trim()) throw new Error("Enter some text to translate.");
+    if (!this.langNames[target] || target === "auto") throw new Error("Choose an output language.");
+    if (source !== "auto" && !this.langNames[source]) throw new Error("Choose an input language.");
+    const generation = this.generation;
+    const protectedText = mask(text);
+    let masked = protectedText.masked;
+    const prefixes = this.settings.protectedPrefixes;
+    if (prefixes.length) masked = masked.replace(/\S+/g, (word) => {
+      if (!prefixes.some((prefix) => word.startsWith(prefix))) return word;
+      return MARK + (protectedText.tokens.push(word) - 1) + MARK;
+    });
+    const result = await this.translate([masked], target, source);
+    if (!this.active || generation !== this.generation) throw new Error("Settings changed. Translate again.");
+    if (result?.rateLimited) throw new Error("Google is rate limiting requests. Try again shortly.");
+    const translated = result?.results?.[0];
+    if (typeof translated?.text !== "string" || !translated.text.length) throw new Error("Could not translate. Try again.");
+    const src = translated.src && translated.src !== "auto" ? translated.src : source;
+    return { text: unmask(translated.text, protectedText.tokens), src, target };
+  }
+
   setTargetLang(code) {
     this.mutate({ targetLang: code || null });
     const next = this.resolve(code || null);
@@ -1010,6 +1155,8 @@ return class AutoTranslate {
       const [target, setTargetState] = React.useState(self.settings.targetLang);
       const [dms, setDmsState] = React.useState(self.settings.dms);
       const [off, setOff] = React.useState(self.settings.disabledGuilds);
+      const [showOriginal, setShowOriginal] = React.useState(self.settings.showOriginal);
+      const [prefixes, setPrefixes] = React.useState(self.settings.protectedPrefixes.join(", "));
       const [serversOpen, setServersOpen] = React.useState(false);
       const [, force] = BdApi.Hooks.useForceUpdate();
       React.useEffect(() => {
@@ -1056,10 +1203,7 @@ return class AutoTranslate {
             ]
           : [];
 
-      const tlOptions = Object.entries(self.langNames)
-        .filter(([c]) => c !== "auto")
-        .map(([c, name]) => ({ label: name, value: c }))
-        .sort((a, b) => a.label.localeCompare(b.label, self.targetLang));
+      const tlOptions = languageOptions(self.langNames, self.settings.favorites, self.targetLang);
 
       const addOptions = tlOptions.filter(
         (o) => o.value !== self.targetLang && !list.includes(o.value),
@@ -1183,7 +1327,20 @@ return class AutoTranslate {
           { name: "Translate direct messages", inline: true },
           h(BdApi.Components.SwitchInput, { value: dms, onChange: toggleDms }),
         ),
+        h(BdApi.Components.SettingItem, { name: "Always show the original message", inline: true },
+          h(BdApi.Components.SwitchInput, { value: showOriginal, onChange: (value) => { setShowOriginal(value); self.setShowOriginal(value); } })),
+        h("div", { className: "at-card" },
+          h("span", { className: "at-title" }, "Favorite languages"),
+          h("div", { className: "at-hint" }, "Favorites appear first in every language selector."),
+          h("div", { className: "at-body" },
+            self.settings.favorites.map((code) => h("button", { type: "button", className: "at-tag", key: code, onClick: () => self.setFavorites(self.settings.favorites.filter((c) => c !== code)), "aria-label": `Remove ${self.langNames[code] || code} from favorites` }, `★ ${self.langNames[code] || code} ×`)),
+            h(BdApi.Components.DropdownInput, { value: "_favorite", options: [{ value: "_favorite", label: "+ Add favorite" }, ...tlOptions.filter((o) => !self.settings.favorites.includes(o.value))], onChange: (code) => { if (code !== "_favorite") self.setFavorites([...self.settings.favorites, code]); } }))),
+        h("div", { className: "at-hint", style: { marginTop: 12 } }, "All languages are translated by default. Add languages below only to filter them."),
         card,
+        h(TranslationPreview, { plugin: self }),
+        h("label", { className: "at-preview", style: { marginTop: 12 } }, "Keep words with these prefixes unchanged in previews",
+          h("input", { value: prefixes, placeholder: "!, /", className: "bd-select", onChange: (event) => { setPrefixes(event.target.value); self.setProtectedPrefixes(event.target.value); } }),
+          h("span", { className: "at-hint" }, "Separate prefixes with commas, for example !command or /command.")),
         h(
           "div",
           { className: "at-adv" },
