@@ -16,6 +16,7 @@ import { makeLogger } from "../core/logger.js";
 import { native } from "../core/paths.js";
 import { checkForUpdate, type UpdateStatus } from "../core/updates.js";
 import type { PluginManager } from "../core/plugins.js";
+import { Discreate } from "../api/index.js";
 import type { ThemeManager } from "../core/themes.js";
 import type { SettingsStore } from "../core/settings.js";
 import { version } from "../../../package.json";
@@ -42,6 +43,7 @@ const PILL_ID = "discreate-pill";
 const OVERLAY_ID = "discreate-overlay";
 const UPDATE_OVERLAY_ID = "discreate-update-overlay";
 let removeShortcut: (() => void) | undefined;
+let removePluginPanel: (() => void) | undefined;
 
 function ensureStyles(): void {
   if (document.getElementById(STYLE_ID)) return;
@@ -203,6 +205,7 @@ type Tab = "plugins" | "themes" | "messagelog" | "about";
 
 export function injectSettings(deps: Deps): void {
   removeShortcut?.();
+  removePluginPanel?.();
   ensureStyles();
 
   // Remove any previous mount (e.g. on hot-reload).
@@ -395,6 +398,26 @@ export function injectSettings(deps: Deps): void {
     }
     for (const entry of all) {
       const extra: HTMLElement[] = [];
+      if (entry.plugin.getSettingsPanel && deps.plugins.isEnabled(entry.id)) {
+        extra.push(mkBtn("Settings", () => {
+          removePluginPanel?.();
+          body.replaceChildren(mkBtn("Back to plugins", () => renderBody()));
+          const host = document.createElement("div");
+          body.appendChild(host);
+          try {
+            const panel = entry.plugin.getSettingsPanel!();
+            if (panel instanceof Node) host.appendChild(panel);
+            else if (Discreate.ReactDOM?.createRoot) {
+              const reactRoot = Discreate.ReactDOM.createRoot(host);
+              removePluginPanel = () => { reactRoot.unmount(); removePluginPanel = undefined; };
+              reactRoot.render(panel);
+            } else if (Discreate.ReactDOM?.render) {
+              Discreate.ReactDOM.render(panel, host);
+              removePluginPanel = () => { Discreate.ReactDOM?.unmountComponentAtNode?.(host); removePluginPanel = undefined; };
+            } else throw new Error("ReactDOM unavailable");
+          } catch (error: any) { host.textContent = "Could not open settings: " + error.message; }
+        }));
+      }
       if (entry.source === "user" && entry.path) {
         extra.push(
           mkBtn("Delete", () => {
@@ -552,6 +575,7 @@ export function injectSettings(deps: Deps): void {
   }
 
   function renderBody(): void {
+    removePluginPanel?.();
     if (currentTab === "plugins") renderPlugins();
     else if (currentTab === "themes") renderThemes();
     else if (currentTab === "messagelog") renderMessageLog();
@@ -563,6 +587,7 @@ export function injectSettings(deps: Deps): void {
     renderBody();
   }
   function closeModal(): void {
+    removePluginPanel?.();
     overlay.hidden = true;
   }
   function toggleModal(): void {

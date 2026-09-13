@@ -7,7 +7,7 @@ import {
 import { join, basename, resolve } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
-import { downloadFile, fetchText } from "./network.js";
+import { downloadFile, fetchText, fetchResponse, cancelRequest } from "./network.js";
 
 const ROOT = join(homedir(), ".discreate");
 const dirs = { themes: join(ROOT, "themes"), plugins: join(ROOT, "plugins"), bdData: join(ROOT, "bd-data") };
@@ -117,6 +117,8 @@ export function exposeNative(): void {
 
     /** Fetch a URL as text via the main process (bypasses renderer CSP). */
     fetchText: (url: string): Promise<string> => fetchText(url),
+    fetchResponse,
+    cancelRequest,
 
     readInstalled: () => {
       const f = join(ROOT, "installed.json");

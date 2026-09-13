@@ -14,6 +14,7 @@ import memberCount from "../plugins/memberCount/index.js";
 import relationshipNotifier from "../plugins/relationshipNotifier/index.js";
 import showHiddenChannels from "../plugins/showHiddenChannels/index.js";
 import showHiddenThings from "../plugins/showHiddenThings/index.js";
+import autoTranslate from "../plugins/autoTranslate/index.js";
 
 const log = makeLogger("core");
 
@@ -33,6 +34,7 @@ async function boot(): Promise<void> {
   plugins.register("relationshipNotifier", relationshipNotifier, "builtin");
   plugins.register("showHiddenChannels", showHiddenChannels, "builtin");
   plugins.register("showHiddenThings", showHiddenThings, "builtin");
+  plugins.register("autoTranslate", autoTranslate, "builtin");
 
   // Wait for Discord's React and FluxDispatcher before installing BdApi,
   // loading user plugins (BD plugins need window.BdApi during evaluation),

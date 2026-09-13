@@ -1,9 +1,64 @@
-import { get as httpGet, type IncomingMessage } from "node:http";
-import { get as httpsGet } from "node:https";
+import { get as httpGet, request as httpRequest, type IncomingMessage } from "node:http";
+import { get as httpsGet, request as httpsRequest } from "node:https";
 import { createWriteStream } from "node:fs";
 import { rename, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { pipeline } from "node:stream/promises";
+
+export interface RequestOptions {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  timeout?: number;
+}
+
+const activeRequests = new Map<string, AbortController>();
+
+export function cancelRequest(id: string): void { activeRequests.get(id)?.abort(); }
+
+/** Buffered HTTP response for BdApi.Net.fetch, outside the page's CSP. */
+export async function fetchResponse(id: string, url: string, options: RequestOptions = {}) {
+  if (activeRequests.has(id)) throw new Error("Duplicate request ID");
+  const controller = new AbortController();
+  activeRequests.set(id, controller);
+  const timeout = setTimeout(() => controller.abort(), options.timeout ?? 10_000);
+  async function send(address: string, redirects = 5): Promise<any> {
+    const parsed = new URL(address);
+    if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("Unsupported protocol: " + parsed.protocol);
+    const request = parsed.protocol === "https:" ? httpsRequest : httpRequest;
+    const res = await new Promise<IncomingMessage>((resolve, reject) => {
+      const req = request(parsed, { method: options.method ?? "GET", headers: options.headers, signal: controller.signal }, resolve);
+      req.on("error", reject);
+      req.end(options.body);
+    });
+    const status = res.statusCode ?? 0;
+    if ([301, 302, 303, 307, 308].includes(status) && res.headers.location) {
+      res.resume();
+      if (!redirects) throw new Error("Too many redirects");
+      const next = new URL(res.headers.location, address);
+      if (next.origin !== parsed.origin) {
+        options = { ...options, headers: Object.fromEntries(Object.entries(options.headers ?? {})
+          .filter(([name]) => !["authorization", "cookie", "proxy-authorization"].includes(name.toLowerCase()))) };
+      }
+      if (status === 303 || ([301, 302].includes(status) && options.method?.toUpperCase() === "POST")) {
+        options = { ...options, method: "GET", body: undefined };
+      }
+      return send(next.href, redirects - 1);
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of res) chunks.push(Buffer.from(chunk));
+    return {
+      status, statusText: res.statusMessage ?? "", url: address,
+      headers: res.rawHeaders.reduce<[string, string][]>((all, value, i) => {
+        if (i % 2 === 0) all.push([value, res.rawHeaders[i + 1]]);
+        return all;
+      }, []),
+      body: Array.from(Buffer.concat(chunks)),
+    };
+  }
+  try { return await send(url); }
+  finally { clearTimeout(timeout); activeRequests.delete(id); }
+}
 
 function response(url: string, redirects = 5): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {

@@ -19,6 +19,10 @@ export interface Native {
   openFolder(p: string): void;
   downloadToFolder(url: string, folder: string, filename?: string): Promise<string>;
   fetchText(url: string): Promise<string>;
+  fetchResponse?(id: string, url: string, options: {
+    method?: string; headers?: Record<string, string>; body?: string; timeout?: number;
+  }): Promise<{ status: number; statusText: string; url: string; headers: [string, string][]; body: number[] }>;
+  cancelRequest?(id: string): void;
   readInstalled(): string | null;
   runInstaller(): void;
 }

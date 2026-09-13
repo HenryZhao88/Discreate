@@ -14,6 +14,8 @@ export interface DiscreatePlugin {
   name: string;
   description: string;
   authors?: string[];
+  /** Optional settings, returned as a DOM node or React element. */
+  getSettingsPanel?(): any;
   /** Called when the plugin is enabled. */
   start(ctx: PluginContext): void;
   /** Called when the plugin is disabled; revert all changes here. */

@@ -244,7 +244,17 @@ export function buildWebpack(): any {
     getByDisplayName,
     getMangled,
     // Common BD aliases
-    waitForModule: (filter: any) => new Promise((resolve) => waitFor(filter, resolve)),
+    waitForModule: (filter: any, opts: any = {}) => new Promise((resolve) => {
+      const signal: AbortSignal | undefined = opts.signal;
+      if (signal?.aborted) { resolve(undefined); return; }
+      let cancel = () => {};
+      const abort = () => { cancel(); resolve(undefined); };
+      signal?.addEventListener("abort", abort, { once: true });
+      cancel = waitFor(filter, (mod) => {
+        signal?.removeEventListener("abort", abort);
+        resolve(mod);
+      });
+    }),
     modules: [],
   };
 }
@@ -364,7 +374,32 @@ function buildDOM(): any {
 
 function buildNet(): any {
   return {
-    fetch(url: string, opts?: any) { return fetch(url, opts); },
+    async fetch(url: string, opts: any = {}) {
+      const bridge = native();
+      if (!bridge?.fetchResponse) return fetch(url, opts);
+      const id = crypto.randomUUID();
+      const signal: AbortSignal | undefined = opts.signal;
+      if (signal?.aborted) throw new DOMException("Request aborted", "AbortError");
+      if (opts.body != null && typeof opts.body !== "string") throw new TypeError("BdApi.Net.fetch expects a string body");
+      const request = bridge.fetchResponse(id, url, {
+        method: opts.method, headers: Object.fromEntries(new Headers(opts.headers).entries()),
+        body: opts.body, timeout: opts.timeout,
+      });
+      let abort: (() => void) | undefined;
+      const aborted = new Promise<never>((_resolve, reject) => {
+        abort = () => { bridge.cancelRequest?.(id); reject(new DOMException("Request aborted", "AbortError")); };
+        signal?.addEventListener("abort", abort, { once: true });
+        if (signal?.aborted) abort();
+      });
+      try {
+        const result = await Promise.race([request, aborted]);
+        const response = new Response([204, 205, 304].includes(result.status) ? null : new Uint8Array(result.body), {
+          status: result.status, statusText: result.statusText, headers: result.headers,
+        });
+        Object.defineProperty(response, "url", { value: result.url });
+        return response;
+      } finally { if (abort) signal?.removeEventListener("abort", abort); }
+    },
   };
 }
 
@@ -584,6 +619,7 @@ let pluginManagerRef: any = null;
 export function setPluginManagerRef(mgr: any): void { pluginManagerRef = mgr; }
 
 function buildPlugins(): any {
+  const resolveId = (name: string) => pluginManagerRef?.all?.().find((p: any) => p.id === name || p.plugin?.name === name)?.id ?? name;
   return {
     get folder() { return native().pluginsDir; },
     get(name: string): any {
@@ -601,7 +637,9 @@ function buildPlugins(): any {
         pluginManagerRef.setEnabled(name, true);
       } catch (e) { log.warn(`Plugins.reload(${name}) failed:`, e); }
     },
-    isEnabled(name: string): boolean { return !!pluginManagerRef?.isEnabled?.(name); },
+    isEnabled(name: string): boolean { return !!pluginManagerRef?.isEnabled?.(resolveId(name)); },
+    enable(name: string): void { pluginManagerRef?.setEnabled?.(resolveId(name), true); },
+    disable(name: string): void { pluginManagerRef?.setEnabled?.(resolveId(name), false); },
   };
 }
 
@@ -617,6 +655,7 @@ function buildComponents(): any {
     componentDidCatch(error: any) { log.error("BdApi ErrorBoundary caught:", error); }
     render(): any {
       if ((this as any).state?.error) {
+        if ((this as any).props.fallback !== undefined) return (this as any).props.fallback;
         return React.createElement("div", { style: { color: "#f04747" } }, "Component error");
       }
       return (this as any).props.children;
@@ -625,7 +664,18 @@ function buildComponents(): any {
 
   const Button = NativeButton ?? ((props: any) => React?.createElement("button", props, props.children));
 
-  return { Button, ErrorBoundary };
+  function SettingItem({ name, note, children }: any) {
+    return React.createElement("div", { className: "bd-setting-item", style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 0" } },
+      React.createElement("div", null, React.createElement("div", null, name), note && React.createElement("div", { className: "bd-setting-note" }, note)), children);
+  }
+  function SwitchInput({ value, onChange, ...props }: any) {
+    return React.createElement("input", { ...props, type: "checkbox", role: "switch", checked: !!value, onChange: (event: any) => onChange?.(event.target.checked) });
+  }
+  function DropdownInput({ value, options = [], onChange, ...props }: any) {
+    return React.createElement("select", { ...props, className: "bd-select", value, style: { maxWidth: 300, color: "var(--text-normal, #fff)", background: "var(--background-secondary, #2b2d31)", padding: "6px 8px", borderRadius: 4 }, onChange: (event: any) => onChange?.(options.find((o: any) => String(o.value) === event.target.value)?.value) },
+      options.map((option: any) => React.createElement("option", { key: String(option.value), value: option.value, disabled: option.disabled }, option.label)));
+  }
+  return { Button, ErrorBoundary, SettingItem, SwitchInput, DropdownInput };
 }
 
 function buildReactUtils(): any {
@@ -668,6 +718,14 @@ export function installBdApi(): any {
     React: Discreate.React,
     ReactDOM: Discreate.ReactDOM,
     Patcher, Webpack, Data, DOM, Net, UI, ContextMenu, Plugins, Components, ReactUtils,
+    Hooks: {
+      useForceUpdate() {
+        const React = Discreate.React;
+        const [version, setVersion] = React.useState(0);
+        const force = React.useCallback(() => setVersion((v: number) => v + 1), []);
+        return [version, force];
+      },
+    },
     Utils: BdUtils,
     Logger: {
       log: (...a: any[]) => log.log(...a),

@@ -4,6 +4,7 @@ import { injectSettings } from "../../src/renderer/ui/inject-settings";
 import { PluginManager } from "../../src/renderer/core/plugins";
 import { ThemeManager } from "../../src/renderer/core/themes";
 import { SettingsStore } from "../../src/renderer/core/settings";
+import { Discreate } from "../../src/renderer/api/index";
 
 function mount(bridge: Record<string, any> = {}) {
   (window as any).DiscreateNative = {
@@ -13,9 +14,24 @@ function mount(bridge: Record<string, any> = {}) {
   const settings = new SettingsStore({ read: () => null, write() {} });
   injectSettings({ settings, plugins: new PluginManager(settings), themes: new ThemeManager(settings) });
 }
-afterEach(() => { vi.restoreAllMocks(); document.body.replaceChildren(); document.head.replaceChildren(); delete (window as any).DiscreateNative; });
+afterEach(() => { vi.restoreAllMocks(); Discreate.ReactDOM = undefined; document.body.replaceChildren(); document.head.replaceChildren(); delete (window as any).DiscreateNative; });
 
 describe("settings UI lifecycle", () => {
+  it("mounts plugin settings and unmounts them before switching tabs", () => {
+    mount();
+    const settings = new SettingsStore({ read: () => null, write() {} });
+    const plugins = new PluginManager(settings);
+    const panel = { type: "panel" };
+    plugins.register("test", { name: "Test", description: "", start() {}, stop() {}, getSettingsPanel: () => panel });
+    plugins.setEnabled("test", true);
+    const reactRoot = { render: vi.fn(), unmount: vi.fn() };
+    Discreate.ReactDOM = { createRoot: vi.fn(() => reactRoot) };
+    injectSettings({ settings, plugins, themes: new ThemeManager(settings) });
+    [...document.querySelectorAll<HTMLButtonElement>(".dc-row button")].find((b) => b.textContent === "Settings")!.click();
+    expect(reactRoot.render).toHaveBeenCalledWith(panel);
+    document.querySelector<HTMLButtonElement>('[data-tab="themes"]')!.click();
+    expect(reactRoot.unmount).toHaveBeenCalledOnce();
+  });
   it("does not append a stale message log after switching tabs", async () => {
     mount();
     document.querySelector<HTMLButtonElement>('[data-tab="messagelog"]')!.click();

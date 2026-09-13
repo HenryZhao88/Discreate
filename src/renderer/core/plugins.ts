@@ -251,6 +251,9 @@ export function wrapBdInstance(instance: any, meta: BdMeta): DiscreatePlugin {
     name: meta.name,
     description: meta.description,
     authors: meta.author ? [meta.author] : [],
+    ...(typeof instance.getSettingsPanel === "function" && {
+      getSettingsPanel: () => instance.getSettingsPanel(),
+    }),
     start() {
       // BD plugins assume every Discord store/module is reachable at boot.
       // Modern Discord lazy-loads MessageStore until the user enters a
